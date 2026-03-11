@@ -1,0 +1,30 @@
+---
+# Benchmark scenario: high-throughput for bulk inference (e.g. BigCodeBench)
+#
+# Target: ~15,000 completions in ~2 hours
+#   - ~700 output tokens/completion average → ~10.5M total tokens
+#   - Need ~1,500 output tokens/sec aggregate
+#   - 4× L40S at ~200 tok/s batched each → ~800 tok/s (conservative)
+#   - With chunked prefill and high concurrency → ~1,200-1,600 tok/s
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/benchmark.yml
+
+# Model
+model_name: mistral-small-24b
+model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+
+# Infrastructure — 4× L40S nodes
+gpu_instance_type: g6e.xlarge
+gpu_pool_min_replicas: 4
+gpu_pool_max_replicas: 4
+
+# vLLM — optimized for batched throughput
+vllm_max_model_len: 4096
+vllm_gpu_memory_utilization: "0.95"
+vllm_extra_args:
+  - --enable-chunked-prefill
+  - --max-num-batched-tokens=4096
+
+# Knative — all pods always running, higher concurrency target
+knative_concurrency_target: "30"

@@ -1,6 +1,11 @@
 ---
-# Demo scenario: pre-warm one GPU node so inference is instant
+# Demo scenario: single pre-warmed GPU node for instant inference.
+
+# Model
 model_name: mistral-small-24b
 model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+
+# Infrastructure
 gpu_instance_type: g6.xlarge
 gpu_pool_min_replicas: 1
+gpu_pool_max_replicas: 1

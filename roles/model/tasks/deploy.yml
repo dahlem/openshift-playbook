@@ -9,6 +9,22 @@
   ansible.builtin.set_fact:
     _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
 
+- name: Build vLLM args
+  ansible.builtin.set_fact:
+    _vllm_args: >-
+      {{
+        [
+          '--port=8080',
+          '--model=/mnt/models',
+          '--served-model-name={{ model_name }}',
+          '--tensor-parallel-size=' ~ (vllm_tensor_parallel_size | default(1) | string),
+          '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
+          '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
+          '--trust-remote-code',
+        ]
+        + (vllm_extra_args | default([]))
+      }}
+
 - name: Create vLLM ServingRuntime
   kubernetes.core.k8s:
     state: present
@@ -30,14 +46,7 @@
           - name: kserve-container
             image: "{{ versions.runtime.vllm_image }}"
             command: ["python", "-m", "vllm.entrypoints.openai.api_server"]
-            args:
-              - --port=8080
-              - --model=/mnt/models
-              - "--served-model-name={{ '{{' }}.Name{{ '}}' }}"
-              - --tensor-parallel-size=1
-              - --max-model-len=4096
-              - --gpu-memory-utilization=0.9
-              - --trust-remote-code
+            args: "{{ _vllm_args }}"
             ports:
               - containerPort: 8080
                 protocol: TCP
@@ -74,9 +83,9 @@
         name: "{{ model_name }}"
         namespace: "{{ model_namespace }}"
         annotations:
-          autoscaling.knative.dev/target: "10"
+          autoscaling.knative.dev/target: "{{ knative_concurrency_target | default('10') }}"
           autoscaling.knative.dev/metric: concurrency
-          autoscaling.knative.dev/minScale: "1"
+          autoscaling.knative.dev/minScale: "{{ gpu_pool_min_replicas | default(1) | string }}"
           autoscaling.knative.dev/maxScale: "{{ gpu_pool_max_replicas | default(4) | string }}"
           autoscaling.knative.dev/scaleDownDelay: "300s"
           autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
@@ -98,9 +107,9 @@
             storageUri: "{{ model_storage_uri }}"
             resources:
               requests:
-                nvidia.com/gpu: 1
+                nvidia.com/gpu: "{{ gpu_per_pod | default(1) }}"
               limits:
-                nvidia.com/gpu: 1
+                nvidia.com/gpu: "{{ gpu_per_pod | default(1) }}"
 
 - name: Wait for InferenceService to be ready
   kubernetes.core.k8s_info:

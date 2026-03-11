@@ -18,6 +18,16 @@ model_name: mistral-small-24b
 model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
 model_namespace: default
 
+# vLLM Runtime Tuning
+vllm_tensor_parallel_size: 1
+vllm_max_model_len: 4096
+vllm_gpu_memory_utilization: "0.9"
+vllm_extra_args: []
+gpu_per_pod: 1
+
+# Knative Autoscaling
+knative_concurrency_target: "10"
+
 # Timeouts (seconds)
 cluster_wait_timeout: 3600
 crd_wait_timeout: 600
