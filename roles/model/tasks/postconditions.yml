@@ -39,6 +39,6 @@
           -H 'Content-Type: application/json' \
           -d '{"model":"{{ model_name }}","messages":[{"role":"user","content":"Hello"}]}'
 
-      Enable scale-to-zero:
-        rosa edit machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} \
-          --enable-autoscaling --min-replicas=0 --max-replicas=4
+      Enable pod scale-to-zero (after verifying the model works):
+        oc annotate inferenceservice {{ model_name }} -n {{ model_namespace }} \
+          autoscaling.knative.dev/minScale=0 --overwrite

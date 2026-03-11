@@ -5,6 +5,10 @@
     name: versions
   when: versions is not defined
 
+- name: Resolve GPU instance type
+  ansible.builtin.set_fact:
+    _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+
 - name: Create vLLM ServingRuntime
   kubernetes.core.k8s:
     state: present
@@ -67,12 +71,12 @@
         annotations:
           autoscaling.knative.dev/target: "10"
           autoscaling.knative.dev/metric: concurrency
-          autoscaling.knative.dev/minScale: "0"
+          autoscaling.knative.dev/minScale: "1"
           autoscaling.knative.dev/maxScale: "8"
           autoscaling.knative.dev/scaleDownDelay: "300s"
           autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
           serving.knative.dev/timeoutSeconds: "900"
-          serving.knative.dev/progress-deadline: "1200s"
+          serving.knative.dev/progress-deadline: "1800s"
       spec:
         predictor:
           tolerations:
@@ -81,7 +85,7 @@
               value: present
               effect: NoSchedule
           nodeSelector:
-            nvidia.com/gpu.present: "true"
+            node.kubernetes.io/instance-type: "{{ _gpu_instance_type }}"
           model:
             runtime: vllm-runtime
             modelFormat:
