@@ -1,0 +1,86 @@
+---
+# Scale GPU resources up or down without destroying anything.
+#
+# Usage:
+#   # Scale down — pods to zero, machinepool to min=1 (saves GPU cost)
+#   ansible-playbook playbooks/gpu-scale.yml -e gpu_state=idle
+#
+#   # Scale up — restore pods and machinepool from a scenario
+#   ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/benchmark.yml
+#
+# To delete the machinepool entirely, use step-gpu-machinepool-teardown.yml
+
+- name: Scale GPU resources
+  hosts: localhost
+  roles:
+    - role: login
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+      when: versions is not defined
+
+    - name: Resolve GPU instance type
+      ansible.builtin.set_fact:
+        _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+
+    - name: Validate gpu_state
+      ansible.builtin.assert:
+        that: gpu_state in ['idle', 'active']
+        fail_msg: "gpu_state must be one of: idle, active (got '{{ gpu_state | default('undefined') }}')"
+
+    # --- idle: scale pods to zero, machinepool to minimum ---
+    - name: Scale to idle
+      when: gpu_state == 'idle'
+      block:
+        - name: Scale pods to zero
+          ansible.builtin.command:
+            cmd: >-
+              oc annotate inferenceservice {{ model_name }} -n {{ model_namespace }}
+              autoscaling.knative.dev/minScale=0 --overwrite
+          changed_when: true
+
+        - name: Scale machinepool to minimum
+          ansible.builtin.command:
+            cmd: >-
+              rosa edit machinepool {{ gpu_pool_name }}
+              --cluster={{ rosa_cluster_name }}
+              --min-replicas=1
+          changed_when: true
+
+        - name: GPU scaled to idle
+          ansible.builtin.debug:
+            msg: >-
+              Pods scaled to zero, machinepool {{ gpu_pool_name }} at min=1.
+              GPU node stays up but is idle. Inference requests will trigger pod scale-up (~3 min cold start).
+
+    # --- active: restore pods and machinepool from scenario ---
+    - name: Scale to active
+      when: gpu_state == 'active'
+      block:
+        - name: Restore machinepool replicas
+          ansible.builtin.command:
+            cmd: >-
+              rosa edit machinepool {{ gpu_pool_name }}
+              --cluster={{ rosa_cluster_name }}
+              --min-replicas={{ gpu_pool_min_replicas }}
+              --max-replicas={{ gpu_pool_max_replicas }}
+          changed_when: true
+
+        - name: Restore pod scale
+          ansible.builtin.command:
+            cmd: >-
+              oc annotate inferenceservice {{ model_name }} -n {{ model_namespace }}
+              autoscaling.knative.dev/minScale={{ gpu_pool_min_replicas | string }}
+              autoscaling.knative.dev/maxScale={{ gpu_pool_max_replicas | string }}
+              --overwrite
+          changed_when: true
+
+        - name: GPU scaled to active
+          ansible.builtin.debug:
+            msg: >-
+              Machinepool {{ gpu_pool_name }}: {{ gpu_pool_min_replicas }}-{{ gpu_pool_max_replicas }} replicas.
+              InferenceService minScale={{ gpu_pool_min_replicas }}.
+              Nodes and pods will scale up as needed.
+
