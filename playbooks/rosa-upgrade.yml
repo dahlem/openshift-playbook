@@ -1,0 +1,131 @@
+---
+# Upgrade cluster version and/or operator channels.
+#
+# Usage:
+#   ansible-playbook playbooks/upgrade.yml --ask-vault-pass                           # check for updates
+#   ansible-playbook playbooks/upgrade.yml --ask-vault-pass -e upgrade_cluster=true   # upgrade cluster
+#   ansible-playbook playbooks/upgrade.yml --ask-vault-pass -e upgrade_operators=true # upgrade operators
+
+- name: Check and apply upgrades
+  hosts: localhost
+  roles:
+    - role: login
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    # -- Cluster upgrade --
+    - name: Check available cluster upgrades
+      ansible.builtin.command:
+        cmd: rosa list upgrades --cluster={{ rosa_cluster_name }}
+      register: _available_upgrades
+      changed_when: false
+
+    - name: Display available cluster upgrades
+      ansible.builtin.debug:
+        msg: "{{ _available_upgrades.stdout }}"
+
+    - name: Get current cluster version
+      ansible.builtin.command:
+        cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+      register: _cluster_info
+      changed_when: false
+
+    - name: Display current version
+      ansible.builtin.debug:
+        msg: "Current cluster version: {{ (_cluster_info.stdout | from_json).openshift_version }}"
+
+    - name: Upgrade cluster
+      ansible.builtin.command:
+        cmd: >-
+          rosa upgrade cluster --cluster={{ rosa_cluster_name }}
+          --mode=auto --yes
+      when: upgrade_cluster | default(false) | bool
+      register: _cluster_upgrade
+
+    - name: Wait for cluster upgrade
+      ansible.builtin.command:
+        cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+      register: _upgrade_state
+      until: >-
+        (_upgrade_state.stdout | from_json).status.state == 'ready'
+      retries: 120
+      delay: 60
+      changed_when: false
+      when: upgrade_cluster | default(false) | bool and _cluster_upgrade is changed
+
+    # -- Machine pool upgrades --
+    - name: Check available machine pool upgrades
+      ansible.builtin.command:
+        cmd: rosa list upgrades --cluster={{ rosa_cluster_name }} --machinepool={{ gpu_pool_name }}
+      register: _mp_upgrades
+      changed_when: false
+      failed_when: false
+
+    - name: Display machine pool upgrades
+      ansible.builtin.debug:
+        msg: "{{ _mp_upgrades.stdout | default('No machine pool upgrades available') }}"
+
+    # -- Operator channel updates --
+    - name: Check installed operator versions
+      ansible.builtin.command:
+        cmd: oc get csv -A -o json
+      register: _csvs
+      changed_when: false
+      when: upgrade_operators | default(false) | bool
+
+    - name: Display installed operator versions
+      ansible.builtin.debug:
+        msg: >-
+          {{ (_csvs.stdout | from_json)['items'] | default([])
+             | map(attribute='metadata')
+             | map(attribute='name')
+             | select('search', 'nfd|gpu|serverless|servicemesh|rhods')
+             | list }}
+      when: upgrade_operators | default(false) | bool
+
+    - name: Update operator subscriptions to latest channels
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: "{{ item.name }}"
+            namespace: "{{ item.namespace }}"
+          spec:
+            channel: "{{ item.channel }}"
+            name: "{{ item.package }}"
+            source: "{{ item.source }}"
+            sourceNamespace: openshift-marketplace
+      loop:
+        - name: nfd
+          namespace: openshift-nfd
+          package: "{{ versions.operators.nfd.package }}"
+          channel: "{{ versions.operators.nfd.channel }}"
+          source: "{{ versions.operators.nfd.source }}"
+        - name: gpu-operator-certified
+          namespace: nvidia-gpu-operator
+          package: "{{ versions.operators.gpu.package }}"
+          channel: "{{ versions.operators.gpu.channel }}"
+          source: "{{ versions.operators.gpu.source }}"
+        - name: serverless-operator
+          namespace: openshift-serverless
+          package: "{{ versions.operators.serverless.package }}"
+          channel: "{{ versions.operators.serverless.channel }}"
+          source: "{{ versions.operators.serverless.source }}"
+        - name: servicemeshoperator
+          namespace: openshift-operators
+          package: "{{ versions.operators.servicemesh.package }}"
+          channel: "{{ versions.operators.servicemesh.channel }}"
+          source: "{{ versions.operators.servicemesh.source }}"
+        - name: rhods-operator
+          namespace: redhat-ods-operator
+          package: "{{ versions.operators.rhoai.package }}"
+          channel: "{{ versions.operators.rhoai.channel }}"
+          source: "{{ versions.operators.rhoai.source }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: upgrade_operators | default(false) | bool

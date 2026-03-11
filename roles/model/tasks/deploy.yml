@@ -1,0 +1,112 @@
+---
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Create vLLM ServingRuntime
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: serving.kserve.io/v1alpha1
+      kind: ServingRuntime
+      metadata:
+        name: vllm-runtime
+        namespace: "{{ model_namespace }}"
+      spec:
+        annotations:
+          prometheus.kserve.io/port: "8080"
+          prometheus.kserve.io/path: /metrics
+        multiModel: false
+        supportedModelFormats:
+          - name: vllm
+            autoSelect: true
+        containers:
+          - name: kserve-container
+            image: "{{ versions.runtime.vllm_image }}"
+            command: ["python", "-m", "vllm.entrypoints.openai.api_server"]
+            args:
+              - --port=8080
+              - --model=/mnt/models
+              - "--served-model-name={{ '{{' }}.Name{{ '}}' }}"
+              - --tensor-parallel-size=1
+              - --max-model-len=4096
+              - --gpu-memory-utilization=0.9
+              - --trust-remote-code
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            env:
+              - name: HF_HUB_CACHE
+                value: /tmp/hf-cache
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              failureThreshold: 60
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 120
+              periodSeconds: 10
+              failureThreshold: 3
+
+- name: Create InferenceService
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: serving.kserve.io/v1beta1
+      kind: InferenceService
+      metadata:
+        name: "{{ model_name }}"
+        namespace: "{{ model_namespace }}"
+        annotations:
+          autoscaling.knative.dev/target: "10"
+          autoscaling.knative.dev/metric: concurrency
+          autoscaling.knative.dev/minScale: "0"
+          autoscaling.knative.dev/maxScale: "8"
+          autoscaling.knative.dev/scaleDownDelay: "300s"
+          autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
+          serving.knative.dev/timeoutSeconds: "900"
+          serving.knative.dev/progress-deadline: "1200s"
+      spec:
+        predictor:
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Equal
+              value: present
+              effect: NoSchedule
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
+          model:
+            runtime: vllm-runtime
+            modelFormat:
+              name: vllm
+            storageUri: "{{ model_storage_uri }}"
+            resources:
+              requests:
+                nvidia.com/gpu: 1
+              limits:
+                nvidia.com/gpu: 1
+
+- name: Wait for InferenceService to be ready
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+  register: _isvc
+  until: >-
+    _isvc.resources | length > 0 and
+    _isvc.resources[0].status is defined and
+    _isvc.resources[0].status.conditions is defined and
+    (_isvc.resources[0].status.conditions
+     | selectattr('type', 'equalto', 'Ready')
+     | selectattr('status', 'equalto', 'True')
+     | list | length > 0)
+  retries: "{{ (model_wait_timeout | int / 15) | int }}"
+  delay: 15

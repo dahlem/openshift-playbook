@@ -1,0 +1,53 @@
+---
+# Post: all subscriptions installed, CRDs available, CSVs succeeded
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Verify all required CRDs exist
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item.crd }}"
+  register: _crd_post
+  loop:
+    - { crd: "nodefeaturediscoveries.nfd.openshift.io", label: "NFD" }
+    - { crd: "clusterpolicies.nvidia.com", label: "GPU Operator" }
+    - { crd: "dscinitializations.dscinitialization.opendatahub.io", label: "RHOAI DSCI" }
+    - { crd: "datascienceclusters.datasciencecluster.opendatahub.io", label: "RHOAI DSC" }
+  loop_control:
+    label: "{{ item.label }}"
+
+- name: Assert all CRDs present
+  ansible.builtin.assert:
+    that: item.resources | length > 0
+    fail_msg: "CRD {{ item.item.crd }} not found — {{ item.item.label }} operator may have failed."
+  loop: "{{ _crd_post.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+
+- name: Check for failed CSVs
+  ansible.builtin.command:
+    cmd: oc get csv -A -o json
+  register: _csvs_raw
+  changed_when: false
+
+- name: Parse CSV states
+  ansible.builtin.set_fact:
+    _failed_csvs: >-
+      {{ (_csvs_raw.stdout | from_json)['items'] | default([])
+         | selectattr('status.phase', 'defined')
+         | selectattr('status.phase', 'equalto', 'Failed')
+         | map(attribute='metadata.name') | list }}
+
+- name: Assert no failed CSVs
+  ansible.builtin.assert:
+    that: _failed_csvs | length == 0
+    fail_msg: "Failed operator installations: {{ _failed_csvs | join(', ') }}"
+
+- name: "operators postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "All operator CRDs present, no failed CSVs."

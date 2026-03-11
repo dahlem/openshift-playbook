@@ -1,0 +1,59 @@
+---
+# Pre: oc logged in, credentials available (or secret already exists)
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Assert oc is logged in
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: "Not logged in via oc."
+
+- name: Check if pull secret already exists
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: redhat-registry
+  register: _existing_secret
+
+- name: Check credentials provided
+  ansible.builtin.assert:
+    that: >-
+      (_existing_secret.resources | length > 0) or
+      (registry_username is defined and registry_password is defined)
+    fail_msg: |
+      No pull secret and no credentials provided.
+      Pass: --extra-vars 'registry_username=... registry_password=...'
+      Get credentials: https://access.redhat.com/terms-based-registry/
+
+- name: Check if pull secret is linked to default SA
+  kubernetes.core.k8s_info:
+    kind: ServiceAccount
+    namespace: "{{ model_namespace }}"
+    name: default
+  register: _pre_sa
+  when: _existing_secret.resources | length > 0
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _existing_secret.resources | length > 0 and
+        _pre_sa.resources | default([]) | length > 0 and
+        'redhat-registry' in (_pre_sa.resources[0].imagePullSecrets | default([]) | map(attribute='name') | list)
+      ) }}
+
+- name: "pull_secret: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "pull_secret: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "pull_secret preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Pull secret already exists.' if (_existing_secret.resources | length > 0)
+         else 'Credentials provided, will create pull secret.' }}
+  when: _deploy_needed | bool

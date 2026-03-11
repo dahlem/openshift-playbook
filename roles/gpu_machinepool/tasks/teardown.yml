@@ -1,0 +1,23 @@
+---
+- name: Check if GPU machine pool exists
+  ansible.builtin.command:
+    cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }}
+  register: _gpu_pool_info
+  changed_when: false
+  failed_when: false
+
+- name: Delete GPU machine pool
+  ansible.builtin.command:
+    cmd: rosa delete machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} --yes
+  when: _gpu_pool_info.rc == 0
+
+- name: Wait for GPU node to drain
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ _gpu_instance_type | default(gpu_instance_type | default(versions.infrastructure.gpu_instance_type)) }}"
+  register: _gpu_nodes
+  until: _gpu_nodes.resources | length == 0
+  retries: 30
+  delay: 15
+  failed_when: false

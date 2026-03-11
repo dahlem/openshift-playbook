@@ -1,0 +1,23 @@
+---
+# ============================================================
+# Site-specific config — copy to site.yml and fill in your values
+# ============================================================
+# This file contains infrastructure identifiers specific to your
+# AWS account, VPC, and ROSA setup.
+#
+#   cp inventory/group_vars/all/site.yml.example inventory/group_vars/all/site.yml
+
+# Cluster
+rosa_cluster_name: my-cluster
+rosa_hosted_cp: true
+rosa_oidc_config_id: <your-oidc-config-id>
+
+# IAM
+rosa_installer_role: arn:aws:iam::<account-id>:role/<installer-role>
+rosa_support_role: arn:aws:iam::<account-id>:role/<support-role>
+rosa_worker_role: arn:aws:iam::<account-id>:role/<worker-role>
+
+# Networking
+rosa_private_subnet: subnet-<private>
+rosa_public_subnet: subnet-<public>
+aws_region: us-east-1

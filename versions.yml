@@ -1,0 +1,74 @@
+---
+# Version constraints for the deployment stack.
+# Similar to pyproject.toml — declares what we need and
+# the preflight role resolves whether the constraints can be met.
+
+cluster:
+  openshift_version: "4.21.3"  # exact version to deploy
+  rosa_cli: ">=1.2.60"
+  oc_cli: ">=4.17"
+
+operators:
+  nfd:
+    channel: stable
+    source: redhat-operators
+    package: nfd
+  gpu:
+    channel: v24.9
+    source: certified-operators
+    package: gpu-operator-certified
+  serverless:
+    channel: stable
+    source: redhat-operators
+    package: serverless-operator
+  servicemesh:
+    channel: stable
+    source: redhat-operators
+    package: servicemeshoperator
+  rhoai:
+    channel: stable
+    source: redhat-operators
+    package: rhods-operator
+
+infrastructure:
+  gpu_instance_type: g6.xlarge
+  # Supported GPU types for ROSA HCP (from Red Hat docs):
+  #   g5.48xlarge, g6.xlarge-g6.48xlarge, g6e.xlarge-g6e.48xlarge
+  #   p4d.24xlarge, p5.48xlarge
+  compute_instance_type: m5.2xlarge
+  # Minimum subnet tag headroom (50 - ~8 tags per pool)
+  min_subnet_tag_headroom: 8
+
+runtime:
+  vllm_image: registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
+
+# OCM API schema — pin API versions, response schemas, and field paths.
+# Bump api.*.version when migrating to a new OCM API version.
+# Update fields.* when the response JSON structure changes.
+ocm:
+  api:
+    clusters_mgmt:
+      version: v1           # /api/clusters_mgmt/{version}/...
+    accounts_mgmt:
+      version: v1           # /api/accounts_mgmt/{version}/...
+      # Field paths used in selectattr/map — the contract with OCM's JSON schema.
+      # If a new API version renames or flattens these, update here only.
+      fields:
+        account_id: account.id     # path to account ID in a RoleBinding item
+        role_id: role.id           # path to role ID in a RoleBinding item
+  # Response 'kind' values we validate (schema contract)
+  schema:
+    role_binding_list: SubscriptionRoleBindingList
+    role_binding: RoleBinding
+    account: Account
+    error: Error
+  # Subscription-level roles required for cluster operations.
+  # Keys are stable profile identifiers; values are OCM role IDs.
+  subscription_roles:
+    cluster_editor: ClusterEditor
+    machine_pool_editor: MachinePoolEditor
+  # Cluster groups
+  groups:
+    cluster_admins:
+      name: cluster-admins   # OCM group name in the groups API path
+      user_id_field: id       # field path for user ID in group members response

@@ -1,0 +1,57 @@
+---
+# Post: KServe ready, service mesh configured, model namespace in mesh
+
+- name: Verify KServe CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: inferenceservices.serving.kserve.io
+  register: _kserve_crd
+
+- name: Assert KServe CRD
+  ansible.builtin.assert:
+    that: _kserve_crd.resources | length > 0
+    fail_msg: "KServe CRD not found."
+
+- name: Verify KServe controller running
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-applications
+    name: kserve-controller-manager
+  register: _kserve
+
+- name: Assert KServe controller ready
+  ansible.builtin.assert:
+    that: >-
+      _kserve.resources | length > 0 and
+      (_kserve.resources[0].status.readyReplicas | default(0)) >= 1
+    fail_msg: "KServe controller not ready."
+
+- name: Verify Istio control plane
+  kubernetes.core.k8s_info:
+    api_version: maistra.io/v2
+    kind: ServiceMeshControlPlane
+    namespace: istio-system
+  register: _smcp
+
+- name: Assert SMCP exists
+  ansible.builtin.assert:
+    that: _smcp.resources | length > 0
+    fail_msg: "ServiceMeshControlPlane not found in istio-system."
+
+- name: Verify model namespace in mesh
+  kubernetes.core.k8s_info:
+    api_version: maistra.io/v1
+    kind: ServiceMeshMemberRoll
+    namespace: istio-system
+    name: default
+  register: _smmr
+
+- name: Assert namespace in mesh
+  ansible.builtin.assert:
+    that: model_namespace in (_smmr.resources[0].status.configuredMembers | default([]))
+    fail_msg: "{{ model_namespace }} namespace not in service mesh."
+
+- name: "ai_platform postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "KServe ready, Istio running, {{ model_namespace }} namespace in mesh."

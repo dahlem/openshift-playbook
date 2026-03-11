@@ -1,0 +1,32 @@
+---
+# Post: pull secret exists and is linked to default SA
+
+- name: Verify pull secret exists
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: redhat-registry
+  register: _secret
+
+- name: Assert pull secret exists
+  ansible.builtin.assert:
+    that: _secret.resources | length > 0
+    fail_msg: "Pull secret 'redhat-registry' not found in {{ model_namespace }}."
+
+- name: Verify pull secret linked to default SA
+  kubernetes.core.k8s_info:
+    kind: ServiceAccount
+    namespace: "{{ model_namespace }}"
+    name: default
+  register: _sa
+
+- name: Assert pull secret is linked
+  ansible.builtin.assert:
+    that: >-
+      _sa.resources | length > 0 and
+      'redhat-registry' in (_sa.resources[0].imagePullSecrets | default([]) | map(attribute='name') | list)
+    fail_msg: "Pull secret not linked to default SA in {{ model_namespace }}."
+
+- name: "pull_secret postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Pull secret exists and linked to default SA in {{ model_namespace }}."

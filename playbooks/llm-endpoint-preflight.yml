@@ -1,0 +1,11 @@
+---
+# Dry-run: validate all constraints without changing anything.
+#
+# Usage:
+#   ansible-playbook playbooks/preflight.yml --ask-vault-pass
+
+- name: Preflight checks
+  hosts: localhost
+  roles:
+    - role: login
+    - role: preflight

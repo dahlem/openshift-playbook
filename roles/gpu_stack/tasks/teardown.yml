@@ -1,0 +1,17 @@
+---
+- name: Delete ClusterPolicy
+  kubernetes.core.k8s:
+    state: absent
+    api_version: nvidia.com/v1
+    kind: ClusterPolicy
+    name: gpu-cluster-policy
+  failed_when: false
+
+- name: Delete NFD instance
+  kubernetes.core.k8s:
+    state: absent
+    api_version: nfd.openshift.io/v1
+    kind: NodeFeatureDiscovery
+    namespace: openshift-nfd
+    name: nfd-instance
+  failed_when: false

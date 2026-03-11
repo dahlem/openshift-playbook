@@ -1,0 +1,26 @@
+---
+# Bootstrap: discover infrastructure and write site.yml
+#
+# Prerequisites:
+#   - AWS session active (rh-aws-saml-login or aws sso login)
+#   - Vault created with at least vault_ocm_token
+#
+# Usage:
+#   ansible-playbook playbooks/bootstrap.yml --ask-vault-pass
+#
+# Set cluster name upfront (skips prompt):
+#   ansible-playbook playbooks/bootstrap.yml --ask-vault-pass \
+#     --extra-vars 'rosa_cluster_name=my-cluster'
+#
+# Re-run is safe — only discovers values not already in site.yml.
+
+- name: Bootstrap site configuration
+  hosts: localhost
+  pre_tasks:
+    - name: Ensure login vars have defaults
+      ansible.builtin.set_fact:
+        aws_region: "{{ aws_region | default('us-east-1') }}"
+        rosa_cluster_name: "{{ rosa_cluster_name | default('') }}"
+  roles:
+    - role: login
+    - role: bootstrap

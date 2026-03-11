@@ -1,0 +1,32 @@
+---
+# Remove operator subscriptions and CSVs.
+# CRDs and namespaces are left for manual cleanup to avoid data loss.
+
+- name: Delete operator subscriptions
+  kubernetes.core.k8s:
+    state: absent
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    namespace: "{{ item.namespace }}"
+    name: "{{ item.name }}"
+  loop:
+    - { name: rhods-operator, namespace: redhat-ods-operator }
+    - { name: servicemeshoperator, namespace: openshift-operators }
+    - { name: serverless-operator, namespace: openshift-serverless }
+    - { name: gpu-operator-certified, namespace: nvidia-gpu-operator }
+    - { name: nfd, namespace: openshift-nfd }
+  loop_control:
+    label: "{{ item.name }}"
+  failed_when: false
+
+- name: Delete ClusterServiceVersions
+  ansible.builtin.shell: |
+    oc delete csv -n {{ item }} --all
+  loop:
+    - redhat-ods-operator
+    - openshift-operators
+    - openshift-serverless
+    - nvidia-gpu-operator
+    - openshift-nfd
+  failed_when: false
+  changed_when: true

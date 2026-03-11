@@ -1,0 +1,32 @@
+---
+# Verify a single access grant. Called in a loop from postconditions.yml.
+# Input: _grant (loop_var), _post_admin_ids, _post_all_role_bindings, field accessors
+
+- name: "Verify {{ _grant.username }}: assert cluster-admin"
+  ansible.builtin.assert:
+    that: _grant.username in _post_admin_ids
+    fail_msg: >-
+      User {{ _grant.username }} is not in {{ _group_name }} on {{ rosa_cluster_name }}
+  when: "'cluster_admins' in (_grant.groups | default([]))"
+
+- name: "Verify {{ _grant.username }}: resolve role IDs"
+  ansible.builtin.set_fact:
+    _verify_user_role_ids: >-
+      {{ _post_all_role_bindings
+         | selectattr(_field_account_id, 'equalto', _grant.account_id)
+         | map(attribute=_field_role_id) | list }}
+
+- name: "Verify {{ _grant.username }}: compute required role IDs"
+  ansible.builtin.set_fact:
+    _verify_required_role_ids: >-
+      {{ _grant.subscription_roles | default([])
+         | map('extract', versions.ocm.subscription_roles) | list }}
+
+- name: "Verify {{ _grant.username }}: assert all roles granted"
+  ansible.builtin.assert:
+    that: item in _verify_user_role_ids
+    fail_msg: >-
+      User {{ _grant.username }} lacks {{ item }} on subscription {{ _subscription_id }}
+  loop: "{{ _verify_required_role_ids }}"
+  loop_control:
+    label: "{{ item }}"

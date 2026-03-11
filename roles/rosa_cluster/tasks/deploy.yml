@@ -1,0 +1,31 @@
+---
+- name: Check if cluster already exists
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_info
+  changed_when: false
+  failed_when: false
+
+- name: Create ROSA HCP cluster
+  ansible.builtin.command:
+    cmd: >-
+      rosa create cluster
+      --cluster-name={{ rosa_cluster_name }}
+      --sts --mode=auto --hosted-cp
+      --oidc-config-id={{ rosa_oidc_config_id }}
+      --subnet-ids={{ rosa_private_subnet }},{{ rosa_public_subnet }}
+      --role-arn={{ rosa_installer_role }}
+      --support-role-arn={{ rosa_support_role }}
+      --worker-iam-role={{ rosa_worker_role }}
+      --compute-machine-type={{ versions.infrastructure.compute_instance_type }}
+      --version={{ versions.cluster.openshift_version }}
+  when: _cluster_info.rc != 0
+
+- name: Wait for cluster to be ready
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_state
+  until: (_cluster_state.stdout | from_json).status.state == 'ready'
+  retries: "{{ (cluster_wait_timeout | int / 30) | int }}"
+  delay: 30
+  changed_when: false

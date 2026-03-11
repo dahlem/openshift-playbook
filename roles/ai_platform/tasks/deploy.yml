@@ -1,0 +1,115 @@
+---
+- name: Create DSCInitialization
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: dscinitialization.opendatahub.io/v1
+      kind: DSCInitialization
+      metadata:
+        name: default-dsci
+      spec:
+        applicationsNamespace: redhat-ods-applications
+        monitoring:
+          managementState: Managed
+          namespace: redhat-ods-monitoring
+        serviceMesh:
+          auth:
+            audiences: ["https://kubernetes.default.svc"]
+          controlPlane:
+            metricsCollection: Istio
+            name: data-science-smcp
+            namespace: istio-system
+          managementState: Managed
+        trustedCABundle:
+          customCABundle: ""
+          managementState: Managed
+
+- name: Create DataScienceCluster
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components:
+          codeflare:        { managementState: Managed }
+          dashboard:        { managementState: Managed }
+          datasciencepipelines: { managementState: Managed }
+          feastoperator:    { managementState: Removed }
+          kserve:
+            managementState: Managed
+            nim: { managementState: Managed }
+            serving:
+              ingressGateway:
+                certificate: { type: OpenshiftDefaultIngress }
+              managementState: Managed
+              name: knative-serving
+          kueue:            { managementState: Managed }
+          llamastackoperator: { managementState: Removed }
+          modelmeshserving: { managementState: Managed }
+          modelregistry:    { managementState: Managed, registriesNamespace: rhoai-model-registries }
+          ray:              { managementState: Managed }
+          trainingoperator: { managementState: Managed }
+          trustyai:         { managementState: Managed }
+          workbenches:      { managementState: Managed }
+
+- name: Wait for KServe CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: inferenceservices.serving.kserve.io
+  register: _kserve_crd
+  until: _kserve_crd.resources | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for KServe controller
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-applications
+    name: kserve-controller-manager
+  register: _kserve_deploy
+  until: >-
+    _kserve_deploy.resources | length > 0 and
+    (_kserve_deploy.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for ServiceMeshMember CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: servicemeshmembers.maistra.io
+  register: _smm_crd
+  until: _smm_crd.resources | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Join model namespace to service mesh
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: maistra.io/v1
+      kind: ServiceMeshMember
+      metadata:
+        name: default
+        namespace: "{{ model_namespace }}"
+      spec:
+        controlPlaneRef:
+          name: data-science-smcp
+          namespace: istio-system
+
+- name: Wait for mesh membership
+  kubernetes.core.k8s_info:
+    api_version: maistra.io/v1
+    kind: ServiceMeshMemberRoll
+    namespace: istio-system
+    name: default
+  register: _smmr
+  until: >-
+    _smmr.resources | length > 0 and
+    model_namespace in (_smmr.resources[0].status.configuredMembers | default([]))
+  retries: 30
+  delay: 5

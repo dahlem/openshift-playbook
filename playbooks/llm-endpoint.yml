@@ -1,0 +1,22 @@
+---
+# Full end-to-end: cluster + GPU + operators + model
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass
+#
+# Override model or GPU type:
+#   ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
+#     --extra-vars '@scenarios/mistral-small-24b-large.yml'
+
+- name: Full deployment
+  hosts: localhost
+  roles:
+    - role: login
+    - role: rosa_cluster
+    - role: cluster_access
+    - role: gpu_machinepool
+    - role: operators
+    - role: gpu_stack
+    - role: ai_platform
+    - role: pull_secret
+    - role: model

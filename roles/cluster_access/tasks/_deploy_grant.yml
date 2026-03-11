@@ -1,0 +1,42 @@
+---
+# Deploy a single access grant. Called in a loop from deploy.yml.
+# Input: _eval_grant (loop_var) with username, account_id, needs_admin, missing_roles
+
+- name: "Grant {{ _group_name }} to {{ _eval_grant.username }}"
+  ansible.builtin.command:
+    cmd: >-
+      rosa grant user cluster-admin
+      --user={{ _eval_grant.username }}
+      --cluster={{ rosa_cluster_name }}
+  register: _grant_admin_result
+  # ROSA CLI does not return structured errors. String match on stderr is
+  # unavoidable; postconditions provide the authoritative verification.
+  failed_when: >-
+    _grant_admin_result.rc != 0 and
+    'already exists' not in (_grant_admin_result.stderr | default('') | lower)
+  changed_when: _grant_admin_result.rc == 0
+  when: _eval_grant.needs_admin
+
+- name: "Grant {{ item }} to {{ _eval_grant.username }}"
+  ansible.builtin.shell:
+    cmd: >-
+      echo '{{ _payload | to_json }}'
+      | ocm post {{ _ocm_accounts_api }}/subscriptions/{{ _subscription_id }}/role_bindings
+  vars:
+    _payload:
+      account_id: "{{ _eval_grant.account_id }}"
+      account_username: "{{ _eval_grant.username }}"
+      role_id: "{{ item }}"
+      type: Subscription
+  loop: "{{ _eval_grant.missing_roles }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _grant_role_result
+  # OCM returns structured JSON: kind=RoleBinding on success, kind=Error with id=409 on conflict.
+  failed_when: >-
+    _grant_role_result.rc != 0 and
+    ((_grant_role_result.stdout | default('{}') | from_json).id | default('')) != '409'
+  changed_when: >-
+    _grant_role_result.rc == 0 and
+    (_grant_role_result.stdout | default('{}') | from_json).kind | default('')
+      == versions.ocm.schema.role_binding

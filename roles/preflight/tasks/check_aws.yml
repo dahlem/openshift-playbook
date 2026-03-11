@@ -1,0 +1,35 @@
+---
+- name: Verify AWS credentials
+  ansible.builtin.command: aws sts get-caller-identity --region {{ aws_region }}
+  register: _aws_identity
+  changed_when: false
+  failed_when: false
+
+- name: Validate AWS credentials
+  ansible.builtin.assert:
+    that: _aws_identity.rc == 0
+    fail_msg: |
+      AWS credentials not configured or expired.
+      Run: rh-aws-saml-login
+
+- name: Count subnet tags
+  ansible.builtin.command: >-
+    aws ec2 describe-tags
+    --filters "Name=resource-id,Values={{ rosa_private_subnet }}"
+    --query 'Tags | length(@)'
+    --region {{ aws_region }}
+  register: _subnet_tags_raw
+  changed_when: false
+
+- name: Parse subnet tag count
+  ansible.builtin.set_fact:
+    _subnet_tag_count: "{{ _subnet_tags_raw.stdout | int }}"
+
+- name: Validate subnet tag headroom
+  ansible.builtin.assert:
+    that: (50 - _subnet_tag_count | int) >= (versions.infrastructure.min_subnet_tag_headroom | int)
+    fail_msg: |
+      Subnet {{ rosa_private_subnet }} has {{ _subnet_tag_count }} / 50 tags.
+      Need at least {{ versions.infrastructure.min_subnet_tag_headroom }} free.
+      Clean up stale tags or use a different subnet.
+      Run: bash ~/.rosa/find-subnets.sh

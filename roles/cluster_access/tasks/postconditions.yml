@@ -1,0 +1,51 @@
+---
+# Post: all grants satisfied
+
+# --- Re-fetch state (don't trust cached variables) ---
+- name: Get cluster-admins group members
+  ansible.builtin.command:
+    cmd: >-
+      ocm get {{ _ocm_clusters_api }}/clusters/{{ _cluster_id }}/groups/{{ _group_name }}/users
+  register: _post_admins
+  changed_when: false
+
+- name: Parse post-deploy admin IDs
+  ansible.builtin.set_fact:
+    _post_admin_ids: >-
+      {{ (_post_admins.stdout | from_json)['items'] | default([])
+         | map(attribute=_group_user_id_field) | list }}
+
+- name: Get subscription role bindings
+  ansible.builtin.command:
+    cmd: >-
+      ocm get {{ _ocm_accounts_api }}/subscriptions/{{ _subscription_id }}/role_bindings
+  register: _post_bindings
+  changed_when: false
+
+- name: Validate role bindings response schema
+  ansible.builtin.assert:
+    that: >-
+      (_post_bindings.stdout | from_json).kind | default('')
+        == versions.ocm.schema.role_binding_list
+    fail_msg: >-
+      Unexpected role_bindings response: kind={{ (_post_bindings.stdout | from_json).kind | default('missing') }}.
+      Expected {{ versions.ocm.schema.role_binding_list }}.
+
+- name: Parse post-deploy role bindings
+  ansible.builtin.set_fact:
+    _post_all_role_bindings: "{{ (_post_bindings.stdout | from_json)['items'] | default([]) }}"
+
+# --- Verify each grant ---
+- name: Verify access grants
+  ansible.builtin.include_tasks: _verify_grant.yml
+  loop: "{{ cluster_access_grants }}"
+  loop_control:
+    loop_var: _grant
+    label: "{{ _grant.username }}"
+
+- name: "cluster_access postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster_access_grants | length }} grant(s) verified:
+      {{ cluster_access_grants | map(attribute='username') | list | join(', ') }}
+      on cluster {{ rosa_cluster_name }}.

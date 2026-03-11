@@ -1,0 +1,7 @@
+---
+- name: Process access grants
+  ansible.builtin.include_tasks: _deploy_grant.yml
+  loop: "{{ _evaluated_grants | selectattr('needs_action', 'equalto', true) | list }}"
+  loop_control:
+    loop_var: _eval_grant
+    label: "{{ _eval_grant.username }}"

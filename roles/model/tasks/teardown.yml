@@ -1,0 +1,18 @@
+---
+- name: Delete InferenceService
+  kubernetes.core.k8s:
+    state: absent
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+  failed_when: false
+
+- name: Delete ServingRuntime
+  kubernetes.core.k8s:
+    state: absent
+    api_version: serving.kserve.io/v1alpha1
+    kind: ServingRuntime
+    namespace: "{{ model_namespace }}"
+    name: vllm-runtime
+  failed_when: false

@@ -1,0 +1,10 @@
+---
+- name: "gpu_stack: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "gpu_stack: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "gpu_stack: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

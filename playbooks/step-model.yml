@@ -1,0 +1,11 @@
+---
+# Step: Deploy model as InferenceService
+#
+# Usage:
+#   ansible-playbook playbooks/step-model.yml
+
+- name: Deploy model as InferenceService
+  hosts: localhost
+  roles:
+    - role: login
+    - role: model

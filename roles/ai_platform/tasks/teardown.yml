@@ -1,0 +1,25 @@
+---
+- name: Delete ServiceMeshMember
+  kubernetes.core.k8s:
+    state: absent
+    api_version: maistra.io/v1
+    kind: ServiceMeshMember
+    namespace: "{{ model_namespace }}"
+    name: default
+  failed_when: false
+
+- name: Delete DataScienceCluster
+  kubernetes.core.k8s:
+    state: absent
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: default-dsc
+  failed_when: false
+
+- name: Delete DSCInitialization
+  kubernetes.core.k8s:
+    state: absent
+    api_version: dscinitialization.opendatahub.io/v1
+    kind: DSCInitialization
+    name: default-dsci
+  failed_when: false

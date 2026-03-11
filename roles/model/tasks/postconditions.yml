@@ -1,0 +1,44 @@
+---
+# Post: InferenceService is Ready with a URL
+
+- name: Get InferenceService status
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+  register: _isvc
+
+- name: Assert InferenceService is Ready
+  ansible.builtin.assert:
+    that: >-
+      _isvc.resources | length > 0 and
+      _isvc.resources[0].status is defined and
+      _isvc.resources[0].status.conditions is defined and
+      (_isvc.resources[0].status.conditions
+       | selectattr('type', 'equalto', 'Ready')
+       | selectattr('status', 'equalto', 'True')
+       | list | length > 0)
+    fail_msg: "InferenceService {{ model_name }} is not Ready."
+
+- name: Assert InferenceService has a URL
+  ansible.builtin.assert:
+    that: >-
+      _isvc.resources[0].status.url is defined and
+      _isvc.resources[0].status.url | length > 0
+    fail_msg: "InferenceService {{ model_name }} has no URL."
+
+- name: "model postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: |
+      Model {{ model_name }} is ready!
+      URL: {{ _isvc.resources[0].status.url }}
+
+      Test:
+        curl -sk {{ _isvc.resources[0].status.url }}/v1/chat/completions \
+          -H 'Content-Type: application/json' \
+          -d '{"model":"{{ model_name }}","messages":[{"role":"user","content":"Hello"}]}'
+
+      Enable scale-to-zero:
+        rosa edit machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} \
+          --enable-autoscaling --min-replicas=0 --max-replicas=4

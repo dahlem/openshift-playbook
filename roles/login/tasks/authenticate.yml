@@ -1,0 +1,140 @@
+---
+# 1. AWS — must already be authenticated (SAML/SSO is interactive)
+- name: Check AWS session
+  ansible.builtin.command: aws sts get-caller-identity --region {{ aws_region }}
+  register: _aws_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if AWS session is missing
+  ansible.builtin.fail:
+    msg: |
+      AWS credentials not configured or expired.
+      Run: rh-aws-saml-login   (or: aws sso login --profile <profile>)
+      Then re-run the playbook.
+  when: _aws_check.rc != 0
+
+# 2. OCM login
+- name: Check OCM login
+  ansible.builtin.command: ocm whoami
+  register: _ocm_check
+  changed_when: false
+  failed_when: false
+
+- name: Login to OCM
+  ansible.builtin.command: ocm login --token={{ vault_ocm_token }}
+  register: _ocm_login
+  changed_when: _ocm_login.rc == 0
+  when: _ocm_check.rc != 0
+  no_log: true
+
+# 3. ROSA login (uses OCM token)
+- name: Check ROSA login
+  ansible.builtin.command: rosa whoami
+  register: _rosa_check
+  changed_when: false
+  failed_when: false
+
+- name: Login to ROSA
+  ansible.builtin.command: rosa login --token={{ vault_ocm_token }}
+  register: _rosa_login
+  changed_when: _rosa_login.rc == 0
+  when: _rosa_check.rc != 0
+  no_log: true
+
+# 4. oc login — only if cluster exists and we're not already logged in
+- name: Check oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_check
+  changed_when: false
+  failed_when: false
+
+- name: Try stored credentials
+  when:
+    - _oc_check.rc != 0
+    - vault_oc_api_url | default('') | length > 0
+    - vault_oc_password | default('') | length > 0
+  block:
+    - name: Login with stored credentials
+      ansible.builtin.command: >-
+        oc login {{ vault_oc_api_url }}
+        --username=cluster-admin
+        --password={{ vault_oc_password }}
+        --insecure-skip-tls-verify=true
+      register: _oc_stored_login
+      changed_when: _oc_stored_login.rc == 0
+      failed_when: false
+      no_log: true
+
+    - name: Update oc check from stored login
+      ansible.builtin.set_fact:
+        _oc_check: "{{ _oc_check | combine({'rc': _oc_stored_login.rc}) }}"
+      when: _oc_stored_login.rc == 0
+
+- name: Check if cluster exists
+  ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_check
+  changed_when: false
+  failed_when: false
+  when: _oc_check.rc != 0
+
+- name: Get or create cluster-admin credentials
+  when:
+    - _oc_check.rc != 0
+    - _cluster_check.rc | default(1) == 0
+    - (_cluster_check.stdout | default('{}') | from_json).status.state | default('') == 'ready'
+  block:
+    - name: Delete existing admin (credentials lost)
+      ansible.builtin.command: rosa delete admin --cluster={{ rosa_cluster_name }} --yes
+      failed_when: false
+
+    - name: Create cluster-admin user
+      ansible.builtin.command: rosa create admin --cluster={{ rosa_cluster_name }} -o json
+      register: _admin_result
+      failed_when: _admin_result.rc != 0
+
+    - name: Parse admin credentials
+      ansible.builtin.set_fact:
+        _oc_api_url: "{{ (_admin_result.stdout | from_json).api_url }}"
+        _oc_password: "{{ (_admin_result.stdout | from_json).password }}"
+      no_log: true
+
+    - name: Write cluster credentials file (plaintext)
+      ansible.builtin.copy:
+        dest: "{{ inventory_dir }}/group_vars/all/cluster_credentials.yml"
+        content: |
+          ---
+          vault_oc_api_url: "{{ _oc_api_url }}"
+          vault_oc_password: "{{ _oc_password }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Encrypt cluster credentials file
+      ansible.builtin.command:
+        cmd: >-
+          ansible-vault encrypt
+          {{ inventory_dir }}/group_vars/all/cluster_credentials.yml
+      changed_when: true
+
+    - name: Wait for cluster-admin to propagate
+      ansible.builtin.command: >-
+        oc login {{ _oc_api_url }}
+        --username=cluster-admin
+        --password={{ _oc_password }}
+        --insecure-skip-tls-verify=true
+      register: _oc_login
+      until: _oc_login.rc == 0
+      retries: 12
+      delay: 10
+      changed_when: _oc_login.rc == 0
+      no_log: true
+
+# 5. Map vault secrets to role variables (optional — bootstrap runs without these)
+- name: Set registry credentials from vault
+  ansible.builtin.set_fact:
+    registry_username: "{{ vault_registry_username }}"
+    registry_password: "{{ vault_registry_password }}"
+  no_log: true
+  when:
+    - vault_registry_username is defined
+    - vault_registry_password is defined

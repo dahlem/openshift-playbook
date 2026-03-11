@@ -1,0 +1,10 @@
+---
+- name: "ai_platform: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "ai_platform: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "ai_platform: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

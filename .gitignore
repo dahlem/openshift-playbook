@@ -1,0 +1,17 @@
+collections/
+*.retry
+*.pyc
+__pycache__/
+.env
+
+# Secrets and site-specific config
+.vault_pass
+cluster_credentials.yml
+inventory/group_vars/all/vault.yml
+inventory/group_vars/all/site.yml
+
+# Private overlays (contain account IDs, usernames, subnet IDs)
+clusters/*.yml
+!clusters/example.yml
+profiles/*.yml
+!profiles/example.yml

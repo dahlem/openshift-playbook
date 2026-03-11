@@ -1,0 +1,123 @@
+---
+- name: Wait for any pending deletion to complete
+  ansible.builtin.command:
+    cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+  register: _gpu_pool_info
+  changed_when: false
+  failed_when: false
+  until: _gpu_pool_info.rc != 0 or ('being deleted' not in (_gpu_pool_info.stderr | default('')))
+  retries: 20
+  delay: 15
+
+- name: Create GPU machine pool (autoscaling)
+  ansible.builtin.command:
+    cmd: >-
+      rosa create machinepool
+      --cluster={{ rosa_cluster_name }}
+      --name={{ gpu_pool_name }}
+      --instance-type={{ _gpu_instance_type }}
+      --enable-autoscaling
+      --min-replicas={{ gpu_pool_min_replicas }}
+      --max-replicas={{ gpu_pool_max_replicas }}
+      --taints {{ gpu_pool_taint }}
+      --subnet={{ rosa_private_subnet }}
+  when:
+    - _gpu_pool_info.rc != 0
+    - gpu_pool_autoscaling | default(true) | bool
+
+- name: Create GPU machine pool (fixed replicas)
+  ansible.builtin.command:
+    cmd: >-
+      rosa create machinepool
+      --cluster={{ rosa_cluster_name }}
+      --name={{ gpu_pool_name }}
+      --instance-type={{ _gpu_instance_type }}
+      --replicas={{ gpu_pool_replicas | default(1) }}
+      --taints {{ gpu_pool_taint }}
+      --subnet={{ rosa_private_subnet }}
+  when:
+    - _gpu_pool_info.rc != 0
+    - not (gpu_pool_autoscaling | default(true) | bool)
+
+# Phase 1: Verify ROSA accepted the machine pool
+- name: Verify machine pool was created
+  ansible.builtin.command:
+    cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+  register: _pool_verify
+  changed_when: false
+
+- name: Show machine pool status
+  ansible.builtin.debug:
+    msg: >-
+      Machine pool {{ gpu_pool_name }} created
+      ({{ 'autoscaling ' ~ gpu_pool_min_replicas ~ '-' ~ gpu_pool_max_replicas if (gpu_pool_autoscaling | default(true) | bool) else 'replicas=' ~ (gpu_pool_replicas | default(1)) }}).
+      Status: {{ (_pool_verify.stdout | from_json).status.message | default('provisioning') }}
+
+# Phases 2-4 only run when nodes are expected immediately (min > 0 or fixed replicas).
+# With autoscaling min=0, nodes scale up on demand when workloads are scheduled.
+
+- name: Wait for GPU node
+  when: _expect_nodes | bool
+  block:
+    # Phase 2: Wait for EC2 instance to launch
+    - name: Wait for EC2 instance to launch
+      ansible.builtin.command:
+        cmd: >-
+          aws ec2 describe-instances
+          --filters
+          Name=instance-type,Values={{ _gpu_instance_type }}
+          Name=tag:api.openshift.com/name,Values={{ rosa_cluster_name }}
+          Name=instance-state-name,Values=pending,running
+          --query 'Reservations[*].Instances[*].[InstanceId,State.Name,LaunchTime]'
+          --output json
+          --region {{ aws_region }}
+      register: _ec2_check
+      changed_when: false
+      until: (_ec2_check.stdout | from_json | flatten(levels=1) | length) > 0
+      retries: 20
+      delay: 15
+
+    - name: EC2 instance launched
+      ansible.builtin.debug:
+        msg: >-
+          EC2 instance provisioning: {{ (_ec2_check.stdout | from_json | flatten(levels=1))[0] }}
+      when: (_ec2_check.stdout | from_json | flatten(levels=1) | length) > 0
+
+    # Phase 3: Wait for node to register with cluster
+    - name: Wait for node to register with cluster
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
+      register: _gpu_nodes
+      until: _gpu_nodes.resources | length > 0
+      retries: 30
+      delay: 15
+
+    - name: Node registered
+      ansible.builtin.debug:
+        msg: "Node {{ _gpu_nodes.resources[0].metadata.name }} registered, waiting for Ready..."
+
+    # Phase 4: Wait for node to become Ready
+    - name: Wait for GPU node to become Ready
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
+      register: _gpu_nodes
+      until: >-
+        _gpu_nodes.resources | length > 0 and
+        (_gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
+      retries: 20
+      delay: 15
+
+    - name: GPU node ready
+      ansible.builtin.debug:
+        msg: "GPU node {{ _gpu_nodes.resources[0].metadata.name }} is Ready."
+
+- name: Autoscaling pool created (nodes scale on demand)
+  ansible.builtin.debug:
+    msg: >-
+      GPU pool {{ gpu_pool_name }} configured for autoscaling ({{ gpu_pool_min_replicas }}-{{ gpu_pool_max_replicas }}).
+      Nodes will scale up when workloads with GPU requests are scheduled.
+  when: not (_expect_nodes | bool)

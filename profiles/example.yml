@@ -1,0 +1,30 @@
+---
+# Access profile template — copy and fill in your values
+#
+#   cp profiles/example.yml profiles/my-team.yml
+#
+# Usage:
+#   ansible-playbook playbooks/step-cluster-access.yml \
+#     --extra-vars '@profiles/my-team.yml'
+#
+# Each grant specifies:
+#   username           - OCM username (from 'ocm whoami')
+#   account_id         - OCM account ID (from 'ocm whoami')
+#   subscription_roles - list of keys from versions.ocm.subscription_roles
+#   groups             - list of keys from versions.ocm.groups
+
+cluster_access_grants:
+  - username: <ocm-username>
+    account_id: <ocm-account-id>
+    subscription_roles:
+      - cluster_editor
+      - machine_pool_editor
+    groups:
+      - cluster_admins
+
+  # Restricted user (no cluster-admin)
+  # - username: <other-user>
+  #   account_id: <other-account-id>
+  #   subscription_roles:
+  #     - machine_pool_editor
+  #   groups: []

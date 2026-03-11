@@ -1,0 +1,59 @@
+---
+# Evaluate which site.yml values are already present and which need discovery.
+
+- name: Discover region from AWS config
+  ansible.builtin.command: aws configure get region
+  register: _aws_region_check
+  changed_when: false
+  failed_when: false
+
+- name: Set working region
+  ansible.builtin.set_fact:
+    _bootstrap_region: >-
+      {{ aws_region | default(
+           (_aws_region_check.stdout | default('') | trim) | default('us-east-1', true)
+         ) }}
+
+- name: Evaluate existing configuration
+  ansible.builtin.set_fact:
+    _has_cluster_name: >-
+      {{ rosa_cluster_name is defined
+         and rosa_cluster_name | length > 0
+         and rosa_cluster_name != 'my-cluster'
+         and '<' not in (rosa_cluster_name | string) }}
+    _has_oidc: >-
+      {{ rosa_oidc_config_id is defined
+         and rosa_oidc_config_id | string | length > 0
+         and '<' not in (rosa_oidc_config_id | string) }}
+    _has_iam_roles: >-
+      {{ rosa_installer_role is defined and '<' not in (rosa_installer_role | string)
+         and rosa_support_role is defined and '<' not in (rosa_support_role | string)
+         and rosa_worker_role is defined and '<' not in (rosa_worker_role | string) }}
+    _has_subnets: >-
+      {{ rosa_private_subnet is defined and '<' not in (rosa_private_subnet | string)
+         and rosa_public_subnet is defined and '<' not in (rosa_public_subnet | string) }}
+
+- name: Determine what needs discovery
+  ansible.builtin.set_fact:
+    _needs_cluster_name: "{{ not (_has_cluster_name | bool) }}"
+    _needs_oidc: "{{ not (_has_oidc | bool) }}"
+    _needs_iam_roles: "{{ not (_has_iam_roles | bool) }}"
+    _needs_subnets: "{{ not (_has_subnets | bool) }}"
+    _bootstrap_needed: >-
+      {{ not (_has_cluster_name | bool) or not (_has_oidc | bool)
+         or not (_has_iam_roles | bool) or not (_has_subnets | bool) }}
+
+- name: Report configuration status
+  ansible.builtin.debug:
+    msg: >-
+      cluster_name={{ 'OK' if (_has_cluster_name | bool) else 'DISCOVER' }},
+      oidc={{ 'OK' if (_has_oidc | bool) else 'DISCOVER' }},
+      iam_roles={{ 'OK' if (_has_iam_roles | bool) else 'DISCOVER' }},
+      subnets={{ 'OK' if (_has_subnets | bool) else 'DISCOVER' }}
+
+- name: "bootstrap: already complete"
+  ansible.builtin.debug:
+    msg: >-
+      All values present in site.yml. Nothing to discover.
+      Delete site.yml to re-run bootstrap from scratch.
+  when: not (_bootstrap_needed | bool)

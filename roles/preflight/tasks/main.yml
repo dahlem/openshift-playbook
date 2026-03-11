@@ -1,0 +1,37 @@
+---
+# Preflight checks: resolve all dependencies and validate constraints
+# BEFORE any installation begins. Fails fast with a clear report.
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+
+- name: "== CLI Tools =="
+  ansible.builtin.include_tasks: check_cli.yml
+
+- name: "== AWS / Subnet =="
+  ansible.builtin.include_tasks: check_aws.yml
+
+- name: "== Cluster =="
+  ansible.builtin.include_tasks: check_cluster.yml
+
+- name: "== Operator Catalog =="
+  ansible.builtin.include_tasks: check_operators.yml
+  when: preflight_check_operators | default(true)
+
+- name: "== GPU Instance Type =="
+  ansible.builtin.include_tasks: check_gpu.yml
+
+- name: "== Pull Secret =="
+  ansible.builtin.include_tasks: check_pull_secret.yml
+
+- name: Preflight summary
+  ansible.builtin.debug:
+    msg: |
+      ✓ All preflight checks passed.
+
+      Cluster:    {{ rosa_cluster_name }} ({{ _cluster_version | default('pending creation') }})
+      GPU type:   {{ versions.infrastructure.gpu_instance_type }}
+      Subnet:     {{ rosa_private_subnet }} ({{ _subnet_tag_count }} / 50 tags, {{ 50 - _subnet_tag_count }} headroom)
+      Operators:  {{ versions.operators | dict2items | map(attribute='key') | join(', ') }}

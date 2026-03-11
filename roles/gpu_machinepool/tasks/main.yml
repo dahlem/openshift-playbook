@@ -1,0 +1,46 @@
+---
+- name: "gpu_machinepool: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "gpu_machinepool: deploy and verify"
+  when: _deploy_needed | default(true)
+  block:
+    - name: "gpu_machinepool: deploy"
+      ansible.builtin.include_tasks: deploy.yml
+
+    - name: "gpu_machinepool: check postconditions"
+      ansible.builtin.include_tasks: postconditions.yml
+
+  rescue:
+    - name: "gpu_machinepool: deploy FAILED — cleaning up broken pool"
+      ansible.builtin.debug:
+        msg: >-
+          GPU machine pool failed to provision. Cleaning up pool '{{ gpu_pool_name }}'
+          so the next run starts fresh.
+
+    - name: Delete failed machine pool
+      ansible.builtin.command:
+        cmd: rosa delete machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} --yes
+      failed_when: false
+
+    - name: Wait for deletion to complete
+      ansible.builtin.command:
+        cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }}
+      register: _cleanup_check
+      changed_when: false
+      failed_when: false
+      until: _cleanup_check.rc != 0
+      retries: 20
+      delay: 15
+
+    - name: Fail with clear message
+      ansible.builtin.fail:
+        msg: >-
+          GPU machine pool '{{ gpu_pool_name }}' ({{ _gpu_instance_type }}) failed to provision.
+          The broken pool has been cleaned up automatically.
+          Check: instance type availability, IAM permissions, ROSA console for errors.
+          Re-run this step to try again.
+
+- name: "gpu_machinepool: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml
+  when: not (_deploy_needed | default(true))

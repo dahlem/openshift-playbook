@@ -1,0 +1,41 @@
+---
+# Evaluate a single access grant. Called in a loop from preconditions.yml.
+# Input: _grant (loop_var), _cluster_admin_ids, _all_role_bindings, field accessors
+
+- name: "Evaluate {{ _grant.username }}: resolve existing role IDs"
+  ansible.builtin.set_fact:
+    _grant_user_role_ids: >-
+      {{ _all_role_bindings
+         | selectattr(_field_account_id, 'equalto', _grant.account_id)
+         | map(attribute=_field_role_id) | list }}
+
+- name: "Evaluate {{ _grant.username }}: compute required vs existing roles"
+  ansible.builtin.set_fact:
+    _grant_required_role_ids: >-
+      {{ _grant.subscription_roles | default([])
+         | map('extract', versions.ocm.subscription_roles) | list }}
+
+- name: "Evaluate {{ _grant.username }}: compute missing roles"
+  ansible.builtin.set_fact:
+    _grant_missing_roles: >-
+      {{ _grant_required_role_ids | difference(_grant_user_role_ids) | list }}
+
+- name: "Evaluate {{ _grant.username }}: check group membership"
+  ansible.builtin.set_fact:
+    _grant_needs_admin: >-
+      {{ ('cluster_admins' in (_grant.groups | default([])))
+         and (_grant.username not in _cluster_admin_ids) }}
+
+- name: "Evaluate {{ _grant.username }}: append result"
+  ansible.builtin.set_fact:
+    _evaluated_grants: >-
+      {{ _evaluated_grants + [{
+        'username': _grant.username,
+        'account_id': _grant.account_id,
+        'missing_roles': _grant_missing_roles,
+        'needs_admin': _grant_needs_admin | bool,
+        'needs_action': (_grant_missing_roles | length > 0) or (_grant_needs_admin | bool),
+        'summary': _grant.username + ' needs' +
+          (' ' + _group_name if (_grant_needs_admin | bool) else '') +
+          (' ' + (_grant_missing_roles | join(' ')) if (_grant_missing_roles | length > 0) else '')
+      }] }}

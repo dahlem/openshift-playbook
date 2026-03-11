@@ -1,0 +1,41 @@
+---
+- name: Check if cluster exists
+  ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_describe
+  changed_when: false
+  failed_when: false
+
+- name: Set cluster state
+  ansible.builtin.set_fact:
+    _cluster_exists: "{{ _cluster_describe.rc == 0 }}"
+    _cluster_state: "{{ (_cluster_describe.stdout | from_json).status.state | default('unknown') if _cluster_describe.rc == 0 else 'absent' }}"
+    _cluster_version: "{{ (_cluster_describe.stdout | from_json).openshift_version | default('unknown') if _cluster_describe.rc == 0 else 'N/A' }}"
+
+- name: Display cluster state
+  ansible.builtin.debug:
+    msg: "Cluster {{ rosa_cluster_name }}: state={{ _cluster_state }}, version={{ _cluster_version }}"
+
+- name: Validate cluster version constraint
+  ansible.builtin.assert:
+    that: >-
+      _cluster_version is version(versions.cluster.openshift | regex_search('[0-9]+\\.[0-9]+'), '>=')
+    fail_msg: |
+      Cluster version {{ _cluster_version }} does not meet constraint {{ versions.cluster.openshift }}.
+      Consider upgrading: rosa upgrade cluster --cluster={{ rosa_cluster_name }}
+  when: _cluster_exists and _cluster_state == 'ready'
+
+- name: Check oc connectivity (if cluster is ready)
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+  when: _cluster_exists and _cluster_state == 'ready'
+
+- name: Validate oc login
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: |
+      Not logged in to the cluster. Run:
+        rosa create admin --cluster={{ rosa_cluster_name }}
+        oc login ...
+  when: _cluster_exists and _cluster_state == 'ready'

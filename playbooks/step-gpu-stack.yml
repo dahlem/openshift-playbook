@@ -1,0 +1,11 @@
+---
+# Step: Configure GPU stack (NFD + GPU Operator)
+#
+# Usage:
+#   ansible-playbook playbooks/step-gpu-stack.yml
+
+- name: Configure GPU stack (NFD + GPU Operator)
+  hosts: localhost
+  roles:
+    - role: login
+    - role: gpu_stack

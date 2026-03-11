@@ -1,0 +1,15 @@
+---
+# Step: Grant OCM cluster access roles
+#
+# Usage:
+#   ansible-playbook playbooks/step-cluster-access.yml
+#
+# Override target user:
+#   ansible-playbook playbooks/step-cluster-access.yml \
+#     --extra-vars 'cluster_access_username=someone cluster_access_account_id=abc123'
+
+- name: Grant OCM cluster access roles
+  hosts: localhost
+  roles:
+    - role: login
+    - role: cluster_access

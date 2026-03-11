@@ -1,0 +1,11 @@
+---
+# Step: Deploy AI platform (RHOAI, KServe, Service Mesh)
+#
+# Usage:
+#   ansible-playbook playbooks/step-ai-platform.yml
+
+- name: Deploy AI platform (RHOAI, KServe, Service Mesh)
+  hosts: localhost
+  roles:
+    - role: login
+    - role: ai_platform

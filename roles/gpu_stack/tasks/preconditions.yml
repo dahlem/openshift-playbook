@@ -1,0 +1,92 @@
+---
+# Pre: operators step completed (CRDs exist), GPU node is Ready
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Verify NFD CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: nodefeaturediscoveries.nfd.openshift.io
+  register: _nfd_crd
+
+- name: Assert NFD CRD exists
+  ansible.builtin.assert:
+    that: _nfd_crd.resources | length > 0
+    fail_msg: "NFD CRD not found. Run the operators step first."
+
+- name: Verify ClusterPolicy CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: clusterpolicies.nvidia.com
+  register: _cp_crd
+
+- name: Assert ClusterPolicy CRD exists
+  ansible.builtin.assert:
+    that: _cp_crd.resources | length > 0
+    fail_msg: "ClusterPolicy CRD not found. Run the operators step first."
+
+- name: Verify GPU node exists
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ versions.infrastructure.gpu_instance_type }}"
+  register: _gpu_node
+
+- name: Assert GPU node is Ready
+  ansible.builtin.assert:
+    that: >-
+      _gpu_node.resources | length > 0 and
+      (_gpu_node.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
+    fail_msg: "No Ready GPU node. Run the gpu_machinepool step first."
+
+- name: Check if NFD instance already exists
+  kubernetes.core.k8s_info:
+    api_version: nfd.openshift.io/v1
+    kind: NodeFeatureDiscovery
+    namespace: openshift-nfd
+    name: nfd-instance
+  register: _pre_nfd_instance
+
+- name: Check if ClusterPolicy already exists
+  kubernetes.core.k8s_info:
+    api_version: nvidia.com/v1
+    kind: ClusterPolicy
+    name: gpu-cluster-policy
+  register: _pre_clusterpolicy
+
+- name: Check if GPU is already allocatable
+  ansible.builtin.command:
+    cmd: >-
+      oc get nodes -l node.kubernetes.io/instance-type={{ versions.infrastructure.gpu_instance_type }}
+      -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}'
+  register: _pre_gpu_allocatable
+  changed_when: false
+  failed_when: false
+  when:
+    - _pre_nfd_instance.resources | length > 0
+    - _pre_clusterpolicy.resources | length > 0
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_nfd_instance.resources | length > 0 and
+        _pre_clusterpolicy.resources | length > 0 and
+        (_pre_gpu_allocatable.stdout | default('0') | int > 0)
+      ) }}
+
+- name: "gpu_stack: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "gpu_stack: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "gpu_stack preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "NFD + GPU Operator CRDs present, GPU node {{ _gpu_node.resources[0].metadata.name }} is Ready."
+  when: _deploy_needed | bool

@@ -1,0 +1,52 @@
+---
+- name: Verify GPU instance type is available via ROSA
+  ansible.builtin.command: rosa list instance-types -o json
+  register: _instance_types_raw
+  changed_when: false
+  failed_when: false
+
+- name: Check GPU instance type in ROSA list
+  ansible.builtin.assert:
+    that: >-
+      versions.infrastructure.gpu_instance_type in
+      (_instance_types_raw.stdout | from_json | map(attribute='id') | list)
+    fail_msg: |
+      GPU instance type '{{ versions.infrastructure.gpu_instance_type }}' is not available in ROSA.
+      Available accelerated types:
+        rosa list instance-types | grep accelerated
+  when: _instance_types_raw.rc == 0
+
+- name: Verify GPU instance type in AZ
+  ansible.builtin.command: >-
+    aws ec2 describe-instance-type-offerings
+    --location-type availability-zone
+    --filters Name=instance-type,Values={{ versions.infrastructure.gpu_instance_type }}
+    --query 'InstanceTypeOfferings[*].Location'
+    --output json
+    --region {{ aws_region }}
+  register: _az_check
+  changed_when: false
+
+- name: Validate GPU type available in required AZ
+  ansible.builtin.assert:
+    that: >-
+      (_az_check.stdout | from_json | length) > 0
+    fail_msg: |
+      {{ versions.infrastructure.gpu_instance_type }} is not available in any AZ in {{ aws_region }}.
+      Check: aws ec2 describe-instance-type-offerings --location-type availability-zone \
+        --filters Name=instance-type,Values={{ versions.infrastructure.gpu_instance_type }}
+
+- name: Check GPU vCPU quota
+  ansible.builtin.command: >-
+    aws service-quotas get-service-quota
+    --service-code ec2 --quota-code L-DB2E81BA
+    --query 'Quota.Value'
+    --region {{ aws_region }}
+  register: _gpu_quota
+  changed_when: false
+  failed_when: false
+
+- name: Display GPU quota
+  ansible.builtin.debug:
+    msg: "G/VT instance vCPU quota: {{ _gpu_quota.stdout | default('unknown') }}"
+  when: _gpu_quota.rc == 0

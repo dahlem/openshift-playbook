@@ -1,0 +1,18 @@
+---
+# Deploy workload on an existing cluster.
+# Assumes: cluster ready, AWS session active.
+#
+# Usage:
+#   ansible-playbook playbooks/workload.yml --ask-vault-pass
+
+- name: Deploy workload on existing cluster
+  hosts: localhost
+  roles:
+    - role: login
+    - role: cluster_access
+    - role: gpu_machinepool
+    - role: operators
+    - role: gpu_stack
+    - role: ai_platform
+    - role: pull_secret
+    - role: model

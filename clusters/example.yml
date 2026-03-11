@@ -1,0 +1,27 @@
+---
+# Cluster profile template — copy and fill in your values
+#
+#   cp clusters/example.yml clusters/my-cluster.yml
+#
+# Usage:
+#   ansible-playbook playbooks/workload.yml --extra-vars '@clusters/my-cluster.yml' ...
+#
+# Variables here override inventory/group_vars/all/site.yml.
+# Omit any variable to keep the default.
+
+rosa_cluster_name: my-cluster
+# rosa_hosted_cp: true
+# rosa_oidc_config_id: <your-oidc-config-id>
+
+# IAM — uncomment and set if different from site.yml
+# rosa_installer_role: arn:aws:iam::<account>:role/<installer-role>
+# rosa_support_role: arn:aws:iam::<account>:role/<support-role>
+# rosa_worker_role: arn:aws:iam::<account>:role/<worker-role>
+
+# Networking — uncomment and set for your cluster's VPC
+# rosa_private_subnet: subnet-xxx
+# rosa_public_subnet: subnet-yyy
+# aws_region: us-east-1
+
+# Optional: use a different versions file for this cluster
+# versions_file: "{{ playbook_dir }}/../versions-staging.yml"

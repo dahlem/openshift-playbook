@@ -1,0 +1,41 @@
+---
+- name: Verify AWS identity
+  ansible.builtin.command: aws sts get-caller-identity --region {{ aws_region }} --output json
+  register: _aws_id
+  changed_when: false
+
+- name: Show AWS identity
+  ansible.builtin.debug:
+    msg: "AWS: {{ (_aws_id.stdout | from_json).Arn }}"
+
+- name: Verify OCM login
+  ansible.builtin.command: ocm whoami
+  register: _ocm_id
+  changed_when: false
+
+- name: Show OCM identity
+  ansible.builtin.debug:
+    msg: "OCM: {{ _ocm_id.stdout_lines[0] | default('logged in') }}"
+
+- name: Verify ROSA login
+  ansible.builtin.command: rosa whoami
+  register: _rosa_id
+  changed_when: false
+
+- name: Show ROSA identity
+  ansible.builtin.debug:
+    msg: "ROSA: {{ _rosa_id.stdout_lines[0] | default('logged in') }}"
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_id
+  changed_when: false
+  failed_when: false
+
+- name: Show oc identity
+  ansible.builtin.debug:
+    msg: "oc: {{ _oc_id.stdout | default('not logged in (cluster may not exist yet)') }}"
+
+- name: "login: VERIFIED"
+  ansible.builtin.debug:
+    msg: "All required sessions are active."

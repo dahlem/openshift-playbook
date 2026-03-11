@@ -1,0 +1,25 @@
+---
+# ============================================================
+# Public defaults — safe to commit
+# ============================================================
+
+# Version constraints (loaded from versions.yml)
+versions_file: "{{ playbook_dir }}/../versions.yml"
+
+# GPU Machine Pool
+gpu_pool_name: gpu
+gpu_pool_autoscaling: true
+gpu_pool_min_replicas: 0
+gpu_pool_max_replicas: 4
+gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"
+
+# Model Serving
+model_name: mistral-small-24b
+model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+model_namespace: default
+
+# Timeouts (seconds)
+cluster_wait_timeout: 3600
+crd_wait_timeout: 600
+node_wait_timeout: 900
+model_wait_timeout: 1200

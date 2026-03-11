@@ -1,0 +1,137 @@
+---
+# Pre: cluster ready, oc logged in, GPU instance type available
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Resolve GPU instance type
+  ansible.builtin.set_fact:
+    _gpu_instance_type: "{{ gpu_instance_type | default(_gpu_instance_type) }}"
+
+- name: Determine if nodes are expected at rest
+  ansible.builtin.set_fact:
+    _expect_nodes: >-
+      {{ not (gpu_pool_autoscaling | default(true) | bool)
+         or (gpu_pool_min_replicas | default(0) | int) > 0 }}
+
+- name: Verify cluster is ready
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_info
+  changed_when: false
+
+- name: Assert cluster is ready
+  ansible.builtin.assert:
+    that: (_cluster_info.stdout | from_json).status.state == 'ready'
+    fail_msg: "Cluster {{ rosa_cluster_name }} is not ready. Run the rosa_cluster step first."
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Assert oc is logged in
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: "Not logged in via oc. Run: oc login ..."
+
+- name: Verify GPU instance type available in AZ
+  ansible.builtin.command: >-
+    aws ec2 describe-instance-type-offerings
+    --location-type availability-zone
+    --filters Name=instance-type,Values={{ _gpu_instance_type }}
+    --query 'InstanceTypeOfferings[*].Location' --output json
+    --region {{ aws_region }}
+  register: _az_check
+  changed_when: false
+
+- name: Assert GPU type available
+  ansible.builtin.assert:
+    that: (_az_check.stdout | from_json | length) > 0
+    fail_msg: "{{ _gpu_instance_type }} not available in {{ aws_region }}."
+
+- name: Count subnet tags
+  ansible.builtin.command: >-
+    aws ec2 describe-tags
+    --filters "Name=resource-id,Values={{ rosa_private_subnet }}"
+    --query 'Tags | length(@)' --region {{ aws_region }}
+  register: _tag_count
+  changed_when: false
+
+- name: Assert subnet tag headroom
+  ansible.builtin.assert:
+    that: (50 - _tag_count.stdout | int) >= (versions.infrastructure.min_subnet_tag_headroom | int)
+    fail_msg: >-
+      Subnet {{ rosa_private_subnet }} has {{ _tag_count.stdout }}/50 tags.
+      Need {{ versions.infrastructure.min_subnet_tag_headroom }} free for a new machine pool.
+      Clean up stale tags: aws ec2 delete-tags --resources {{ rosa_private_subnet }} --tags Key=<stale-key>
+
+# Verify OCM roles before attempting machine pool creation
+- name: Parse subscription ID from cluster info
+  ansible.builtin.set_fact:
+    _subscription_id: "{{ (_cluster_info.stdout | from_json).subscription.id }}"
+
+- name: Get subscription role bindings for MachinePoolEditor check
+  ansible.builtin.command:
+    cmd: >-
+      ocm get /api/accounts_mgmt/{{ versions.ocm.api.accounts_mgmt.version }}/subscriptions/{{ _subscription_id }}/role_bindings
+  register: _mp_role_check
+  changed_when: false
+  failed_when: false
+
+- name: Verify MachinePoolEditor role exists
+  ansible.builtin.assert:
+    that: >-
+      (_mp_role_check.stdout | from_json)['items'] | default([])
+        | selectattr(versions.ocm.api.accounts_mgmt.fields.role_id, 'equalto', versions.ocm.subscription_roles.machine_pool_editor)
+        | list | length > 0
+    fail_msg: >-
+      {{ versions.ocm.subscription_roles.machine_pool_editor }} role not found for subscription {{ _subscription_id }}.
+      Run: ansible-playbook playbooks/step-cluster-access.yml
+  when: _mp_role_check.rc == 0
+
+- name: Check if GPU machine pool already exists
+  ansible.builtin.command:
+    cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+  register: _pre_pool_check
+  changed_when: false
+  failed_when: false
+
+- name: Check if GPU node is already Ready
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
+  register: _pre_gpu_nodes
+  when:
+    - _pre_pool_check.rc == 0
+    - _expect_nodes | bool
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: "{{ _pre_pool_check.rc != 0 }}"
+  when: not (_expect_nodes | bool)
+
+- name: Determine if deploy is needed (nodes expected)
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_pool_check.rc == 0 and
+        _pre_gpu_nodes.resources | default([]) | length > 0 and
+        (_pre_gpu_nodes.resources | default([]) | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
+      ) }}
+  when: _expect_nodes | bool
+
+- name: "gpu_machinepool: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "gpu_machinepool: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "gpu_machinepool preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Cluster ready, oc logged in, {{ _gpu_instance_type }} available."
+  when: _deploy_needed | bool

@@ -1,0 +1,25 @@
+---
+# Step: Tear down GPU machine pool
+#
+# Usage:
+#   ansible-playbook playbooks/step-gpu-machinepool-teardown.yml
+
+- name: Tear down GPU machine pool
+  hosts: localhost
+  roles:
+    - role: login
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+      when: versions is not defined
+
+    - name: Resolve GPU instance type
+      ansible.builtin.set_fact:
+        _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+
+    - name: Remove GPU machine pool
+      ansible.builtin.include_role:
+        name: gpu_machinepool
+        tasks_from: teardown

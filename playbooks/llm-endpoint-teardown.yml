@@ -1,0 +1,47 @@
+---
+# Tear down in reverse dependency order.
+#
+# Usage:
+#   ansible-playbook playbooks/teardown.yml --ask-vault-pass                       # workload only
+#   ansible-playbook playbooks/teardown.yml --ask-vault-pass -e teardown_cluster=true  # everything
+
+- name: Tear down
+  hosts: localhost
+  roles:
+    - role: login
+  tasks:
+    - name: Remove model
+      ansible.builtin.include_role:
+        name: model
+        tasks_from: teardown
+
+    - name: Remove pull secret
+      ansible.builtin.include_role:
+        name: pull_secret
+        tasks_from: teardown
+
+    - name: Remove AI platform
+      ansible.builtin.include_role:
+        name: ai_platform
+        tasks_from: teardown
+
+    - name: Remove GPU stack
+      ansible.builtin.include_role:
+        name: gpu_stack
+        tasks_from: teardown
+
+    - name: Remove operators
+      ansible.builtin.include_role:
+        name: operators
+        tasks_from: teardown
+
+    - name: Remove GPU machine pool
+      ansible.builtin.include_role:
+        name: gpu_machinepool
+        tasks_from: teardown
+
+    - name: Remove ROSA cluster
+      ansible.builtin.include_role:
+        name: rosa_cluster
+        tasks_from: teardown
+      when: teardown_cluster | default(false) | bool

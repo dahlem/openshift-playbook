@@ -1,0 +1,44 @@
+---
+- name: Check rosa CLI
+  ansible.builtin.command: rosa version
+  register: _rosa_version_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse rosa version
+  ansible.builtin.set_fact:
+    _rosa_version: "{{ _rosa_version_raw.stdout_lines[0] | default('') | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}"
+  when: _rosa_version_raw.rc == 0
+
+- name: Validate rosa CLI version
+  ansible.builtin.assert:
+    that: _rosa_version is version(versions.cluster.rosa_cli | regex_replace('[>=<]', ''), '>=')
+    fail_msg: "rosa CLI {{ _rosa_version }} does not meet constraint {{ versions.cluster.rosa_cli }}. Run: brew upgrade rosa-cli"
+  when: _rosa_version_raw.rc == 0
+
+- name: Fail if rosa CLI missing
+  ansible.builtin.fail:
+    msg: "rosa CLI not found. Install: brew install rosa-cli"
+  when: _rosa_version_raw.rc != 0
+
+- name: Check oc CLI
+  ansible.builtin.command: oc version --client -o json
+  register: _oc_version_raw
+  changed_when: false
+  failed_when: false
+
+- name: Validate oc CLI
+  ansible.builtin.assert:
+    that: _oc_version_raw.rc == 0
+    fail_msg: "oc CLI not found. Install: brew install openshift-cli"
+
+- name: Check aws CLI
+  ansible.builtin.command: aws --version
+  register: _aws_version_raw
+  changed_when: false
+  failed_when: false
+
+- name: Validate aws CLI
+  ansible.builtin.assert:
+    that: _aws_version_raw.rc == 0
+    fail_msg: "aws CLI not found. Install: brew install awscli"

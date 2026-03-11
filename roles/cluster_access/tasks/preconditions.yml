@@ -1,0 +1,163 @@
+---
+# Pre: ROSA + OCM sessions active, cluster exists and ready
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+# --- Derive OCM API paths and field accessors from pinned versions ---
+- name: Derive OCM API paths and field accessors
+  ansible.builtin.set_fact:
+    _ocm_clusters_api: "/api/clusters_mgmt/{{ versions.ocm.api.clusters_mgmt.version }}"
+    _ocm_accounts_api: "/api/accounts_mgmt/{{ versions.ocm.api.accounts_mgmt.version }}"
+    _field_account_id: "{{ versions.ocm.api.accounts_mgmt.fields.account_id }}"
+    _field_role_id: "{{ versions.ocm.api.accounts_mgmt.fields.role_id }}"
+    _group_name: "{{ versions.ocm.groups.cluster_admins.name }}"
+    _group_user_id_field: "{{ versions.ocm.groups.cluster_admins.user_id_field }}"
+
+- name: Get cluster info
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_info
+  changed_when: false
+
+- name: Parse cluster details
+  ansible.builtin.set_fact:
+    _cluster: "{{ _cluster_info.stdout | from_json }}"
+    _cluster_id: "{{ (_cluster_info.stdout | from_json).id }}"
+    _subscription_id: "{{ (_cluster_info.stdout | from_json).subscription.id }}"
+
+- name: Assert cluster is ready
+  ansible.builtin.assert:
+    that: _cluster.status.state == 'ready'
+    fail_msg: "Cluster {{ rosa_cluster_name }} state is '{{ _cluster.status.state }}', expected 'ready'."
+
+- name: Get OCM user identity
+  ansible.builtin.command: ocm whoami
+  register: _ocm_whoami
+  changed_when: false
+
+- name: Parse OCM identity
+  ansible.builtin.set_fact:
+    _ocm_whoami_parsed: "{{ _ocm_whoami.stdout | from_json }}"
+
+- name: Validate OCM identity schema
+  ansible.builtin.assert:
+    that: _ocm_whoami_parsed.kind | default('') == versions.ocm.schema.account
+    fail_msg: >-
+      Unexpected 'ocm whoami' response: kind={{ _ocm_whoami_parsed.kind | default('missing') }}.
+      Expected {{ versions.ocm.schema.account }}.
+
+# --- Fetch all state (one API call per resource) ---
+- name: Get cluster-admins group members
+  ansible.builtin.command:
+    cmd: >-
+      ocm get {{ _ocm_clusters_api }}/clusters/{{ _cluster_id }}/groups/{{ _group_name }}/users
+  register: _cluster_admins_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse cluster admin user IDs
+  ansible.builtin.set_fact:
+    _cluster_admin_ids: >-
+      {{ (_cluster_admins_raw.stdout | from_json)['items'] | default([])
+         | map(attribute=_group_user_id_field) | list }}
+  when: _cluster_admins_raw.rc == 0
+
+- name: Default cluster admin IDs (API failed)
+  ansible.builtin.set_fact:
+    _cluster_admin_ids: []
+  when: _cluster_admins_raw.rc != 0
+
+- name: Get subscription role bindings
+  ansible.builtin.command:
+    cmd: >-
+      ocm get {{ _ocm_accounts_api }}/subscriptions/{{ _subscription_id }}/role_bindings
+  register: _sub_role_bindings_raw
+  changed_when: false
+  failed_when: false
+
+- name: Validate role bindings response schema
+  ansible.builtin.assert:
+    that: >-
+      (_sub_role_bindings_raw.stdout | from_json).kind | default('')
+        == versions.ocm.schema.role_binding_list
+    fail_msg: >-
+      Unexpected role_bindings response: kind={{ (_sub_role_bindings_raw.stdout | from_json).kind | default('missing') }}.
+      Expected {{ versions.ocm.schema.role_binding_list }}
+      (accounts_mgmt/{{ versions.ocm.api.accounts_mgmt.version }}).
+      The OCM API version may be incompatible.
+  when: _sub_role_bindings_raw.rc == 0
+
+- name: Parse all role bindings
+  ansible.builtin.set_fact:
+    _all_role_bindings: "{{ (_sub_role_bindings_raw.stdout | from_json)['items'] | default([]) }}"
+  when: _sub_role_bindings_raw.rc == 0
+
+- name: Default role bindings (API failed)
+  ansible.builtin.set_fact:
+    _all_role_bindings: []
+  when: _sub_role_bindings_raw.rc != 0
+
+# --- Build access grants list ---
+# Priority: explicit cluster_access_grants > legacy single-user vars > current OCM user
+- name: Build grant from legacy single-user vars
+  ansible.builtin.set_fact:
+    cluster_access_grants:
+      - username: "{{ cluster_access_username }}"
+        account_id: "{{ cluster_access_account_id }}"
+        subscription_roles:
+          - cluster_editor
+          - machine_pool_editor
+        groups:
+          - cluster_admins
+  when:
+    - cluster_access_grants is not defined
+    - cluster_access_username is defined
+    - cluster_access_account_id is defined
+
+- name: Build default grant from current OCM user
+  ansible.builtin.set_fact:
+    cluster_access_grants:
+      - username: "{{ _ocm_whoami_parsed.username }}"
+        account_id: "{{ _ocm_whoami_parsed.id }}"
+        subscription_roles:
+          - cluster_editor
+          - machine_pool_editor
+        groups:
+          - cluster_admins
+  when: cluster_access_grants is not defined
+
+# --- Evaluate each grant ---
+- name: Initialize evaluated grants
+  ansible.builtin.set_fact:
+    _evaluated_grants: []
+
+- name: Evaluate access grants
+  ansible.builtin.include_tasks: _evaluate_grant.yml
+  loop: "{{ cluster_access_grants }}"
+  loop_control:
+    loop_var: _grant
+    label: "{{ _grant.username }}"
+
+- name: Determine if deploy needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ _evaluated_grants | selectattr('needs_action', 'equalto', true) | list | length > 0 }}
+
+- name: "cluster_access: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: >-
+      All {{ cluster_access_grants | length }} grant(s) already satisfied.
+  when: not (_deploy_needed | bool)
+
+- name: "cluster_access preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      {{ _evaluated_grants | selectattr('needs_action', 'equalto', true) | list | length }}
+      grant(s) to apply:
+      {{ _evaluated_grants | selectattr('needs_action', 'equalto', true)
+         | map(attribute='summary') | list | join('; ') }}
+  when: _deploy_needed | bool

@@ -1,0 +1,11 @@
+---
+# Step: Create GPU machine pool on ROSA cluster
+#
+# Usage:
+#   ansible-playbook playbooks/step-gpu-machinepool.yml
+
+- name: Create GPU machine pool on ROSA cluster
+  hosts: localhost
+  roles:
+    - role: login
+    - role: gpu_machinepool

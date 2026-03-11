@@ -1,0 +1,10 @@
+---
+- name: "cluster_access: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "cluster_access: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "cluster_access: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

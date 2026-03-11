@@ -1,0 +1,100 @@
+---
+# Pre: cluster ready, oc logged in, operator packages available in catalog
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Assert oc is logged in
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: "Not logged in via oc. Run rosa_cluster step first, then oc login."
+
+- name: Check operator marketplace is available
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: openshift-marketplace
+  register: _marketplace
+
+- name: Assert marketplace namespace exists
+  ansible.builtin.assert:
+    that: _marketplace.resources | length > 0
+    fail_msg: "openshift-marketplace namespace not found. Is this an OpenShift cluster?"
+
+- name: Check operator packages in catalog
+  kubernetes.core.k8s_info:
+    api_version: packages.operators.coreos.com/v1
+    kind: PackageManifest
+    namespace: openshift-marketplace
+    name: "{{ item.value.package }}"
+  register: _pkg_results
+  loop: "{{ versions.operators | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Assert all operator packages available
+  ansible.builtin.assert:
+    that: item.resources | length > 0
+    fail_msg: >-
+      Operator '{{ item.item.key }}' (package={{ item.item.value.package }})
+      not found in catalog {{ item.item.value.source }}.
+  loop: "{{ _pkg_results.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Check if operator subscriptions already exist
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace }}"
+  register: _pre_sub_results
+  loop:
+    - { name: nfd, namespace: openshift-nfd }
+    - { name: gpu-operator-certified, namespace: nvidia-gpu-operator }
+    - { name: serverless-operator, namespace: openshift-serverless }
+    - { name: servicemeshoperator, namespace: openshift-operators }
+    - { name: rhods-operator, namespace: redhat-ods-operator }
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Check if required CRDs already exist
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: _pre_crd_results
+  loop:
+    - nodefeaturediscoveries.nfd.openshift.io
+    - clusterpolicies.nvidia.com
+    - dscinitializations.dscinitialization.opendatahub.io
+    - datascienceclusters.datasciencecluster.opendatahub.io
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        (_pre_sub_results.results | selectattr('resources', 'defined')
+         | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0) and
+        (_pre_crd_results.results | selectattr('resources', 'defined')
+         | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0)
+      ) }}
+
+- name: "operators: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "operators: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "operators preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Cluster accessible, all {{ versions.operators | length }} operator packages available in catalog."
+  when: _deploy_needed | bool

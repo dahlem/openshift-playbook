@@ -1,0 +1,10 @@
+---
+# Authenticate all sessions (AWS, OCM, ROSA, oc).
+#
+# Usage:
+#   ansible-playbook playbooks/login.yml
+
+- name: Login
+  hosts: localhost
+  roles:
+    - role: login

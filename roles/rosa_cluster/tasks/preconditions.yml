@@ -1,0 +1,60 @@
+---
+# Pre: CLI tools installed, AWS credentials valid, ROSA logged in
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Check rosa CLI
+  ansible.builtin.command: rosa version
+  register: _rosa_ver
+  changed_when: false
+  failed_when: false
+
+- name: Validate rosa CLI available
+  ansible.builtin.assert:
+    that: _rosa_ver.rc == 0
+    fail_msg: "rosa CLI not found. Install: brew install rosa-cli"
+
+- name: Check ROSA login
+  ansible.builtin.command: rosa whoami
+  register: _rosa_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Validate ROSA login
+  ansible.builtin.assert:
+    that: _rosa_whoami.rc == 0
+    fail_msg: "Not logged in to ROSA. Run: ocm login --token=... && rosa login"
+
+- name: Check AWS credentials
+  ansible.builtin.command: aws sts get-caller-identity --region {{ aws_region }}
+  register: _aws_id
+  changed_when: false
+  failed_when: false
+
+- name: Validate AWS credentials
+  ansible.builtin.assert:
+    that: _aws_id.rc == 0
+    fail_msg: "AWS credentials not configured or expired. Run: rh-aws-saml-login"
+
+- name: Count subnet tags
+  ansible.builtin.command: >-
+    aws ec2 describe-tags
+    --filters "Name=resource-id,Values={{ rosa_private_subnet }}"
+    --query 'Tags | length(@)' --region {{ aws_region }}
+  register: _tag_count
+  changed_when: false
+
+- name: Validate subnet tag headroom
+  ansible.builtin.assert:
+    that: (50 - _tag_count.stdout | int) >= (versions.infrastructure.min_subnet_tag_headroom | int)
+    fail_msg: >-
+      Subnet {{ rosa_private_subnet }} has {{ _tag_count.stdout }}/50 tags.
+      Need {{ versions.infrastructure.min_subnet_tag_headroom }} free.
+
+- name: "rosa_cluster preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "CLI tools, AWS credentials, ROSA login, subnet headroom — all OK."

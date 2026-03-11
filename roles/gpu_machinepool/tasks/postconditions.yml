@@ -1,0 +1,88 @@
+---
+# Post: machine pool exists in ROSA with correct config.
+# When nodes are expected (fixed replicas or min > 0): EC2 + node Ready checks.
+# When autoscaling with min=0: pool existence and config are sufficient.
+
+- name: Verify machine pool exists in ROSA
+  ansible.builtin.command:
+    cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+  register: _pool_info
+  changed_when: false
+
+- name: Parse pool info
+  ansible.builtin.set_fact:
+    _pool: "{{ _pool_info.stdout | from_json }}"
+
+- name: Assert pool instance type
+  ansible.builtin.assert:
+    that: _pool.instance_type == _gpu_instance_type
+    fail_msg: >-
+      GPU pool {{ gpu_pool_name }} has instance type {{ _pool.instance_type }},
+      expected {{ _gpu_instance_type }}.
+
+# --- Node verification (only when nodes are expected) ---
+
+- name: Verify nodes are running
+  when: _expect_nodes | bool
+  block:
+    - name: Assert pool has replicas
+      ansible.builtin.assert:
+        that: _pool.status.current_replicas | int >= 1
+        fail_msg: >-
+          GPU pool {{ gpu_pool_name }} has {{ _pool.status.current_replicas }} replicas,
+          expected >= 1. Message: {{ _pool.status.message | default('none') }}
+
+    - name: Check EC2 instances
+      ansible.builtin.command:
+        cmd: >-
+          aws ec2 describe-instances
+          --filters
+          Name=instance-type,Values={{ _gpu_instance_type }}
+          Name=tag:api.openshift.com/name,Values={{ rosa_cluster_name }}
+          --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType,LaunchTime]'
+          --output json
+          --region {{ aws_region }}
+      register: _ec2_instances
+      changed_when: false
+
+    - name: Parse EC2 instances
+      ansible.builtin.set_fact:
+        _ec2_list: "{{ _ec2_instances.stdout | from_json | flatten(levels=1) }}"
+
+    - name: Assert EC2 instances exist
+      ansible.builtin.assert:
+        that: _ec2_list | length > 0
+        fail_msg: >-
+          No EC2 instances of type {{ _gpu_instance_type }} found
+          for cluster {{ rosa_cluster_name }}.
+
+    - name: Check GPU nodes
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
+      register: _gpu_nodes
+
+    - name: Assert GPU node is Ready
+      ansible.builtin.assert:
+        that: >-
+          _gpu_nodes.resources | length > 0 and
+          (_gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
+        fail_msg: >-
+          No Ready GPU node with instance-type={{ _gpu_instance_type }}.
+
+    - name: "gpu_machinepool postconditions: PASSED (nodes running)"
+      ansible.builtin.debug:
+        msg: >-
+          GPU pool {{ gpu_pool_name }}: {{ _pool.status.current_replicas }} replica(s),
+          node {{ _gpu_nodes.resources[0].metadata.name }} is Ready.
+
+# --- Autoscaling with min=0: pool config is sufficient ---
+
+- name: "gpu_machinepool postconditions: PASSED (autoscaling idle)"
+  ansible.builtin.debug:
+    msg: >-
+      GPU pool {{ gpu_pool_name }}: autoscaling {{ gpu_pool_min_replicas }}-{{ gpu_pool_max_replicas }},
+      {{ _pool.status.current_replicas | default(0) }} replica(s) currently running.
+      Nodes scale up when workloads request GPUs.
+  when: not (_expect_nodes | bool)

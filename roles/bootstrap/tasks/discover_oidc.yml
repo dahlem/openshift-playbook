@@ -1,0 +1,74 @@
+---
+# Discover OIDC configuration via ROSA CLI.
+# Auto-selects if one exists; prompts if multiple; offers to create if none.
+
+- name: List OIDC configurations
+  ansible.builtin.command: rosa list oidc-config -o json
+  register: _oidc_list_raw
+  changed_when: false
+
+- name: Parse OIDC configurations
+  ansible.builtin.set_fact:
+    _oidc_configs: "{{ _oidc_list_raw.stdout | from_json }}"
+
+- name: Handle no OIDC configurations
+  when: _oidc_configs | length == 0
+  block:
+    - name: Prompt to create OIDC config
+      ansible.builtin.pause:
+        prompt: "No OIDC configurations found. Create one? [y/N]"
+      register: _oidc_create_prompt
+
+    - name: Create OIDC config
+      ansible.builtin.command: rosa create oidc-config --mode auto --managed --yes
+      when: (_oidc_create_prompt.user_input | default('n') | lower | trim) == 'y'
+      changed_when: true
+
+    - name: Re-list OIDC configurations
+      ansible.builtin.command: rosa list oidc-config -o json
+      register: _oidc_list_raw
+      changed_when: false
+      when: (_oidc_create_prompt.user_input | default('n') | lower | trim) == 'y'
+
+    - name: Update OIDC list
+      ansible.builtin.set_fact:
+        _oidc_configs: "{{ _oidc_list_raw.stdout | from_json }}"
+      when: (_oidc_create_prompt.user_input | default('n') | lower | trim) == 'y'
+
+    - name: Fail if still no OIDC configs
+      ansible.builtin.fail:
+        msg: |
+          No OIDC configurations available.
+          Create one: rosa create oidc-config --mode auto --managed
+          Or set rosa_oidc_config_id in site.yml manually.
+      when: _oidc_configs | length == 0
+
+- name: Auto-select single OIDC config
+  ansible.builtin.set_fact:
+    _discovered_oidc_config_id: "{{ _oidc_configs[0].id }}"
+  when: _oidc_configs | length == 1
+
+- name: Select from multiple OIDC configs
+  when: _oidc_configs | length > 1
+  block:
+    - name: Display OIDC options
+      ansible.builtin.debug:
+        msg: |-
+          Available OIDC configurations:
+          {% for cfg in _oidc_configs %}
+          {{ loop.index }}. {{ cfg.id }}{% if cfg.managed | default(false) %} (managed){% endif %}{% if cfg.issuer_url is defined %} - {{ cfg.issuer_url }}{% endif %}
+          {% endfor %}
+
+    - name: Choose OIDC config
+      ansible.builtin.pause:
+        prompt: "Select OIDC config [1]"
+      register: _oidc_choice
+
+    - name: Set selected OIDC config
+      ansible.builtin.set_fact:
+        _discovered_oidc_config_id: >-
+          {{ _oidc_configs[(_oidc_choice.user_input | default('1') | int) - 1].id }}
+
+- name: "Discovered OIDC config: {{ _discovered_oidc_config_id }}"
+  ansible.builtin.debug:
+    msg: "OIDC config ID: {{ _discovered_oidc_config_id }}"

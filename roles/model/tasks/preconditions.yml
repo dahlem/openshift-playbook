@@ -1,0 +1,115 @@
+---
+# Pre: KServe ready, GPU node available, pull secret linked
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Assert oc is logged in
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: "Not logged in via oc."
+
+- name: Check InferenceService CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: inferenceservices.serving.kserve.io
+  register: _isvc_crd
+
+- name: Assert KServe CRD is present
+  ansible.builtin.assert:
+    that: _isvc_crd.resources | length > 0
+    fail_msg: "InferenceService CRD not found. Run ai_platform role first."
+
+- name: Check ServingRuntime CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: servingruntimes.serving.kserve.io
+  register: _sr_crd
+
+- name: Assert ServingRuntime CRD is present
+  ansible.builtin.assert:
+    that: _sr_crd.resources | length > 0
+    fail_msg: "ServingRuntime CRD not found. Run ai_platform role first."
+
+- name: Check GPU node is available
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "nvidia.com/gpu.present=true"
+  register: _gpu_nodes
+
+- name: Assert at least one GPU node is Ready
+  ansible.builtin.assert:
+    that: >-
+      _gpu_nodes.resources | length > 0 and
+      (_gpu_nodes.resources | selectattr('status.conditions', 'defined')
+       | map(attribute='status.conditions')
+       | map('selectattr', 'type', 'equalto', 'Ready')
+       | map('selectattr', 'status', 'equalto', 'True')
+       | map('list') | select('length') | list | length > 0)
+    fail_msg: "No Ready GPU node with nvidia.com/gpu.present=true label found."
+
+- name: Check pull secret exists
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: redhat-registry
+  register: _pull_secret
+
+- name: Assert pull secret exists
+  ansible.builtin.assert:
+    that: _pull_secret.resources | length > 0
+    fail_msg: "Pull secret 'redhat-registry' not found in {{ model_namespace }}. Run pull_secret role first."
+
+- name: Check namespace is in service mesh
+  kubernetes.core.k8s_info:
+    api_version: maistra.io/v1
+    kind: ServiceMeshMember
+    namespace: "{{ model_namespace }}"
+    name: default
+  register: _mesh_member
+
+- name: Assert namespace is in mesh
+  ansible.builtin.assert:
+    that: _mesh_member.resources | length > 0
+    fail_msg: "Namespace {{ model_namespace }} is not a member of the service mesh. Run ai_platform role first."
+
+- name: Check if InferenceService already exists and is Ready
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+  register: _pre_isvc
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_isvc.resources | length > 0 and
+        _pre_isvc.resources[0].status is defined and
+        _pre_isvc.resources[0].status.conditions is defined and
+        (_pre_isvc.resources[0].status.conditions
+         | selectattr('type', 'equalto', 'Ready')
+         | selectattr('status', 'equalto', 'True')
+         | list | length > 0) and
+        _pre_isvc.resources[0].status.url is defined and
+        _pre_isvc.resources[0].status.url | length > 0
+      ) }}
+
+- name: "model: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: >-
+      model: already complete, skipping deploy.
+      URL: {{ _pre_isvc.resources[0].status.url | default('N/A') }}
+  when: not (_deploy_needed | bool)
+
+- name: "model preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "KServe CRDs present, GPU node ready, pull secret exists, namespace in mesh."
+  when: _deploy_needed | bool

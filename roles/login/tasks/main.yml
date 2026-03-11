@@ -1,0 +1,6 @@
+---
+- name: "login: authenticate sessions"
+  ansible.builtin.include_tasks: authenticate.yml
+
+- name: "login: verify sessions"
+  ansible.builtin.include_tasks: verify.yml

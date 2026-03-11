@@ -1,0 +1,11 @@
+---
+# Cluster creation only.
+#
+# Usage:
+#   ansible-playbook playbooks/cluster.yml --ask-vault-pass
+
+- name: Create ROSA HCP cluster
+  hosts: localhost
+  roles:
+    - role: login
+    - role: rosa_cluster

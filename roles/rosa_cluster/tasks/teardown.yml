@@ -1,0 +1,35 @@
+---
+- name: Check if cluster exists
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_info
+  changed_when: false
+  failed_when: false
+
+- name: Delete ROSA cluster
+  ansible.builtin.command:
+    cmd: rosa delete cluster --cluster={{ rosa_cluster_name }} --yes
+  when: _cluster_info.rc == 0
+
+- name: Wait for cluster deletion
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }}
+  register: _cluster_gone
+  until: _cluster_gone.rc != 0
+  retries: 60
+  delay: 30
+  changed_when: false
+  failed_when: false
+  when: _cluster_info.rc == 0
+
+- name: Clean up operator roles
+  ansible.builtin.command:
+    cmd: rosa delete operator-roles --cluster={{ rosa_cluster_name }} --mode=auto --yes
+  failed_when: false
+  when: _cluster_info.rc == 0
+
+- name: Cluster deleted
+  ansible.builtin.debug:
+    msg: >-
+      Cluster {{ rosa_cluster_name }} deleted. Operator roles cleaned up.
+      OIDC provider preserved (shared config {{ rosa_oidc_config_id }}).

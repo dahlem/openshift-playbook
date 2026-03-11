@@ -1,0 +1,5 @@
+---
+# Full-precision Mistral-Small-24B on g6e.2xlarge (more RAM + VRAM)
+model_name: mistral-small-24b
+model_storage_uri: "hf://mistralai/Mistral-Small-24B-Instruct-2501"
+gpu_instance_type: g6e.2xlarge

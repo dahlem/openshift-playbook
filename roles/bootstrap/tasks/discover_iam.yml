@@ -1,0 +1,91 @@
+---
+# Discover HCP ROSA IAM roles from AWS.
+# Matches Installer, Support, and Worker roles by name pattern.
+
+- name: List IAM roles matching ROSA HCP
+  ansible.builtin.command:
+    cmd: >-
+      aws iam list-roles
+      --query "Roles[?contains(RoleName, 'HCP-ROSA')]"
+      --output json
+  register: _iam_roles_raw
+  changed_when: false
+
+- name: Parse HCP IAM roles
+  ansible.builtin.set_fact:
+    _hcp_roles: "{{ _iam_roles_raw.stdout | from_json }}"
+
+- name: Fail if no HCP roles found
+  ansible.builtin.fail:
+    msg: |
+      No IAM roles matching 'HCP-ROSA' found.
+      Create them: rosa create account-roles --mode auto --hosted-cp
+      Or set rosa_installer_role, rosa_support_role, rosa_worker_role in site.yml.
+  when: _hcp_roles | length == 0
+
+- name: Find role candidates by type
+  ansible.builtin.set_fact:
+    _installer_arns: >-
+      {{ _hcp_roles | selectattr('RoleName', 'search', 'Installer') | map(attribute='Arn') | list }}
+    _support_arns: >-
+      {{ _hcp_roles | selectattr('RoleName', 'search', 'Support') | map(attribute='Arn') | list }}
+    _worker_arns: >-
+      {{ _hcp_roles | selectattr('RoleName', 'search', 'Worker') | map(attribute='Arn') | list }}
+
+- name: Assert all role types found
+  ansible.builtin.assert:
+    that:
+      - _installer_arns | length > 0
+      - _support_arns | length > 0
+      - _worker_arns | length > 0
+    fail_msg: |
+      Could not identify all HCP role types (Installer, Support, Worker).
+      Found: {{ _hcp_roles | map(attribute='RoleName') | list | join(', ') }}
+      Set rosa_installer_role, rosa_support_role, rosa_worker_role in site.yml.
+
+- name: Auto-select roles
+  ansible.builtin.set_fact:
+    _discovered_installer_role: "{{ _installer_arns | first }}"
+    _discovered_support_role: "{{ _support_arns | first }}"
+    _discovered_worker_role: "{{ _worker_arns | first }}"
+  when: _installer_arns | length == 1
+
+- name: Select from multiple role sets
+  when: _installer_arns | length > 1
+  block:
+    - name: Display installer role options
+      ansible.builtin.debug:
+        msg: |-
+          Multiple HCP role sets found. Select the installer role:
+          {% for arn in _installer_arns %}
+          {{ loop.index }}. {{ arn }}
+          {% endfor %}
+
+    - name: Choose installer role
+      ansible.builtin.pause:
+        prompt: "Select installer role [1]"
+      register: _iam_choice
+
+    - name: Set role ARN prefix from selected installer
+      ansible.builtin.set_fact:
+        _selected_installer: "{{ _installer_arns[(_iam_choice.user_input | default('1') | int) - 1] }}"
+
+    - name: Derive role set prefix
+      ansible.builtin.set_fact:
+        _role_prefix: >-
+          {{ _selected_installer | regex_replace('HCP-ROSA-Installer-Role$', '') }}
+
+    - name: Match support and worker roles to same prefix
+      ansible.builtin.set_fact:
+        _discovered_installer_role: "{{ _selected_installer }}"
+        _discovered_support_role: >-
+          {{ _support_arns | select('search', _role_prefix) | first }}
+        _discovered_worker_role: >-
+          {{ _worker_arns | select('search', _role_prefix) | first }}
+
+- name: Discovered IAM roles
+  ansible.builtin.debug:
+    msg: |-
+      Installer: {{ _discovered_installer_role }}
+      Support:   {{ _discovered_support_role }}
+      Worker:    {{ _discovered_worker_role }}

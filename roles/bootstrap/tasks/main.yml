@@ -1,0 +1,42 @@
+---
+- name: "bootstrap: load version constraints"
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: "bootstrap: check existing configuration"
+  ansible.builtin.include_tasks: check_existing.yml
+
+- name: "bootstrap: prompt for cluster name"
+  ansible.builtin.pause:
+    prompt: "Enter your ROSA cluster name"
+  register: _cluster_name_input
+  when: _needs_cluster_name | bool
+
+- name: "bootstrap: set cluster name"
+  ansible.builtin.set_fact:
+    rosa_cluster_name: "{{ _cluster_name_input.user_input | trim }}"
+  when: _needs_cluster_name | bool
+
+- name: "bootstrap: validate cluster name"
+  ansible.builtin.assert:
+    that: rosa_cluster_name | length > 0
+    fail_msg: "Cluster name cannot be empty."
+  when: _needs_cluster_name | bool
+
+- name: "bootstrap: discover OIDC configuration"
+  ansible.builtin.include_tasks: discover_oidc.yml
+  when: _needs_oidc | bool
+
+- name: "bootstrap: discover IAM roles"
+  ansible.builtin.include_tasks: discover_iam.yml
+  when: _needs_iam_roles | bool
+
+- name: "bootstrap: discover VPC subnets"
+  ansible.builtin.include_tasks: discover_subnets.yml
+  when: _needs_subnets | bool
+
+- name: "bootstrap: write site configuration"
+  ansible.builtin.include_tasks: write_site.yml
+  when: _bootstrap_needed | bool

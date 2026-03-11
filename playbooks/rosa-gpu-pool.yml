@@ -1,0 +1,24 @@
+---
+# Add GPU machine pool only.
+#
+# Usage:
+#   ansible-playbook playbooks/gpu-pool.yml --ask-vault-pass
+#
+# Different instance type:
+#   ansible-playbook playbooks/gpu-pool.yml --ask-vault-pass \
+#     --extra-vars 'gpu_instance_type=g6e.2xlarge'
+
+- name: Create GPU machine pool
+  hosts: localhost
+  pre_tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+    - name: Override GPU type if provided
+      ansible.builtin.set_fact:
+        versions: "{{ versions | combine({'infrastructure': {'gpu_instance_type': gpu_instance_type}}, recursive=True) }}"
+      when: gpu_instance_type is defined
+  roles:
+    - role: login
+    - role: gpu_machinepool

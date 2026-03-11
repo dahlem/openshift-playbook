@@ -1,0 +1,10 @@
+---
+- name: "operators: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "operators: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "operators: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

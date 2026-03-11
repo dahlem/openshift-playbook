@@ -1,0 +1,36 @@
+---
+- name: Check if pull secret already exists
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: "{{ model_namespace }}"
+    name: redhat-registry
+  register: _existing_secret
+
+- name: Create pull secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: redhat-registry
+        namespace: "{{ model_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ _docker_config | to_json | b64encode }}"
+  vars:
+    _docker_config:
+      auths:
+        registry.redhat.io:
+          username: "{{ registry_username }}"
+          password: "{{ registry_password }}"
+          auth: "{{ (registry_username + ':' + registry_password) | b64encode }}"
+  when:
+    - _existing_secret.resources | length == 0
+    - registry_username is defined
+    - registry_password is defined
+
+- name: Link pull secret to default service account
+  ansible.builtin.command:
+    cmd: oc secrets link default redhat-registry --for=pull -n {{ model_namespace }}
+  changed_when: true

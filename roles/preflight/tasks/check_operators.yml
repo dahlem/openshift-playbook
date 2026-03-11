@@ -1,0 +1,40 @@
+---
+- name: Check operator availability in catalog
+  kubernetes.core.k8s_info:
+    api_version: packages.operators.coreos.com/v1
+    kind: PackageManifest
+    namespace: openshift-marketplace
+    name: "{{ item.value.package }}"
+  register: _pkg_check
+  failed_when: false
+  loop: "{{ versions.operators | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: _cluster_exists and _cluster_state == 'ready'
+
+- name: Validate operator packages exist
+  ansible.builtin.assert:
+    that: item.resources | length > 0
+    fail_msg: |
+      Operator package '{{ item.item.value.package }}' not found in catalog '{{ item.item.value.source }}'.
+      Check: oc get packagemanifest -n openshift-marketplace | grep {{ item.item.value.package }}
+  loop: "{{ _pkg_check.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+  when:
+    - _cluster_exists and _cluster_state == 'ready'
+    - item.resources is defined
+
+- name: Check operator channel availability
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.key }}: package={{ item.item.value.package }}
+      channel={{ item.item.value.channel }}
+      available_channels={{ item.resources[0].status.channels | map(attribute='name') | list
+      if (item.resources | default([]) | length > 0) else 'unknown' }}
+  loop: "{{ _pkg_check.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+  when:
+    - _cluster_exists and _cluster_state == 'ready'
+    - item.resources is defined

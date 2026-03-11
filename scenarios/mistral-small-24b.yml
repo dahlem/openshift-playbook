@@ -1,0 +1,6 @@
+---
+# Default scenario: quantized Mistral-Small-24B on g6.xlarge (~16 GB VRAM)
+# This matches the defaults in config.yml — use it as a template for new scenarios.
+model_name: mistral-small-24b
+model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+gpu_instance_type: g6.xlarge

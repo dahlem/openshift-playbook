@@ -1,0 +1,111 @@
+---
+# Discover VPC subnets with sufficient tag headroom for ROSA machine pools.
+# Each machine pool uses ~8 of the 50 tag limit per subnet.
+# Presents eligible private/public pairs ranked by headroom for interactive selection.
+
+- name: Get all subnets in region
+  ansible.builtin.command:
+    cmd: >-
+      aws ec2 describe-subnets
+      --region {{ _bootstrap_region }}
+      --output json
+  register: _subnets_raw
+  changed_when: false
+
+- name: Parse subnets
+  ansible.builtin.set_fact:
+    _all_subnets: "{{ (_subnets_raw.stdout | from_json).Subnets }}"
+
+- name: Classify subnets by type
+  ansible.builtin.set_fact:
+    _private_subnets: "{{ _all_subnets | rejectattr('MapPublicIpOnLaunch') | list }}"
+    _public_subnets: "{{ _all_subnets | selectattr('MapPublicIpOnLaunch') | list }}"
+
+- name: Fail if no subnets found
+  ansible.builtin.fail:
+    msg: |
+      No subnets found in {{ _bootstrap_region }}.
+      Set rosa_private_subnet and rosa_public_subnet in site.yml manually.
+  when: _private_subnets | length == 0 or _public_subnets | length == 0
+
+# Build eligible pairs: same AZ, both with sufficient tag headroom.
+# Uses set_fact + loop to accumulate pairs that pass the headroom filter.
+- name: Build eligible subnet pairs
+  ansible.builtin.set_fact:
+    _subnet_pairs: "{{ _subnet_pairs | default([]) + [_pair] }}"
+  vars:
+    _priv_tags: "{{ item.0.Tags | default([]) | length }}"
+    _pub_tags: "{{ item.1.Tags | default([]) | length }}"
+    _min_headroom: "{{ [50 - (_priv_tags | int), 50 - (_pub_tags | int)] | min }}"
+    _pair:
+      az: "{{ item.0.AvailabilityZone }}"
+      private_id: "{{ item.0.SubnetId }}"
+      private_name: >-
+        {{ (item.0.Tags | default([]) | selectattr('Key', 'equalto', 'Name')
+            | map(attribute='Value') | first) | default('(unnamed)') }}
+      private_tags: "{{ _priv_tags }}"
+      public_id: "{{ item.1.SubnetId }}"
+      public_name: >-
+        {{ (item.1.Tags | default([]) | selectattr('Key', 'equalto', 'Name')
+            | map(attribute='Value') | first) | default('(unnamed)') }}
+      public_tags: "{{ _pub_tags }}"
+      headroom: "{{ _min_headroom }}"
+  loop: "{{ _private_subnets | product(_public_subnets) | list }}"
+  when:
+    - item.0.AvailabilityZone == item.1.AvailabilityZone
+    - (_min_headroom | int) >= (versions.infrastructure.min_subnet_tag_headroom | int)
+  no_log: true
+
+- name: Default empty pairs list
+  ansible.builtin.set_fact:
+    _subnet_pairs: []
+  when: _subnet_pairs is not defined
+
+- name: Sort pairs by headroom
+  ansible.builtin.set_fact:
+    _subnet_pairs: "{{ _subnet_pairs | sort(attribute='headroom', reverse=true) }}"
+
+- name: Fail if no eligible pairs
+  ansible.builtin.fail:
+    msg: |
+      No subnet pairs with sufficient tag headroom (>= {{ versions.infrastructure.min_subnet_tag_headroom }}) in {{ _bootstrap_region }}.
+      Each ROSA machine pool uses ~8 of the 50 tag limit.
+      Set rosa_private_subnet and rosa_public_subnet in site.yml manually.
+  when: _subnet_pairs | length == 0
+
+- name: Display subnet options
+  ansible.builtin.debug:
+    msg: |-
+      Eligible subnet pairs in {{ _bootstrap_region }} (by tag headroom):
+      {% for p in _subnet_pairs %}
+      {{ loop.index }}. {{ p.az }}
+         Private: {{ p.private_id }} ({{ p.private_name | trim }}, {{ p.private_tags }}/50 tags, {{ p.headroom }} free)
+         Public:  {{ p.public_id }} ({{ p.public_name | trim }}, {{ p.public_tags }}/50 tags)
+      {% endfor %}
+
+- name: Auto-select single pair
+  ansible.builtin.set_fact:
+    _discovered_private_subnet: "{{ _subnet_pairs[0].private_id }}"
+    _discovered_public_subnet: "{{ _subnet_pairs[0].public_id }}"
+  when: _subnet_pairs | length == 1
+
+- name: Choose subnet pair
+  when: _subnet_pairs | length > 1
+  block:
+    - name: Prompt for subnet selection
+      ansible.builtin.pause:
+        prompt: "Select subnet pair [1]"
+      register: _subnet_choice
+
+    - name: Set selected subnets
+      ansible.builtin.set_fact:
+        _discovered_private_subnet: >-
+          {{ _subnet_pairs[(_subnet_choice.user_input | default('1') | int) - 1].private_id }}
+        _discovered_public_subnet: >-
+          {{ _subnet_pairs[(_subnet_choice.user_input | default('1') | int) - 1].public_id }}
+
+- name: Discovered subnets
+  ansible.builtin.debug:
+    msg: |-
+      Private: {{ _discovered_private_subnet }}
+      Public:  {{ _discovered_public_subnet }}

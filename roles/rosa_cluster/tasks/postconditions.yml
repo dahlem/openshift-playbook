@@ -1,0 +1,30 @@
+---
+# Post: cluster is ready, version matches constraint, API is reachable
+
+- name: Get cluster info
+  ansible.builtin.command:
+    cmd: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _cluster_info
+  changed_when: false
+
+- name: Parse cluster state
+  ansible.builtin.set_fact:
+    _cluster: "{{ _cluster_info.stdout | from_json }}"
+
+- name: Verify cluster is ready
+  ansible.builtin.assert:
+    that: _cluster.status.state == 'ready'
+    fail_msg: "Cluster state is '{{ _cluster.status.state }}', expected 'ready'."
+
+- name: Verify cluster version
+  ansible.builtin.assert:
+    that: _cluster.openshift_version is version(versions.cluster.openshift_version, '>=')
+    fail_msg: "Cluster version {{ _cluster.openshift_version }} is older than required {{ versions.cluster.openshift_version }}."
+
+- name: "rosa_cluster postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      Cluster {{ rosa_cluster_name }} is ready.
+      Version: {{ _cluster.openshift_version }}
+      API: {{ _cluster.api.url }}
+      Console: {{ _cluster.console.url | default('N/A') }}

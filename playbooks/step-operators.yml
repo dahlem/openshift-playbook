@@ -1,0 +1,11 @@
+---
+# Step: Install required operators
+#
+# Usage:
+#   ansible-playbook playbooks/step-operators.yml
+
+- name: Install required operators
+  hosts: localhost
+  roles:
+    - role: login
+    - role: operators
