@@ -36,6 +36,12 @@
     that: _sr_crd.resources | length > 0
     fail_msg: "ServingRuntime CRD not found. Run ai_platform role first."
 
+- name: Determine if GPU nodes are expected at rest
+  ansible.builtin.set_fact:
+    _expect_nodes: >-
+      {{ not (gpu_pool_autoscaling | default(true) | bool)
+         or (gpu_pool_min_replicas | default(0) | int) > 0 }}
+
 - name: Check GPU node is available
   kubernetes.core.k8s_info:
     kind: Node
@@ -53,6 +59,14 @@
        | map('selectattr', 'status', 'equalto', 'True')
        | map('list') | select('length') | list | length > 0)
     fail_msg: "No Ready GPU node with nvidia.com/gpu.present=true label found."
+  when: _expect_nodes | bool
+
+- name: "model: GPU pool autoscales from 0 — node will provision when model is deployed"
+  ansible.builtin.debug:
+    msg: >-
+      No GPU nodes running (autoscaling min=0). Deploying the InferenceService
+      will trigger the autoscaler to provision a GPU node.
+  when: not (_expect_nodes | bool)
 
 - name: Check pull secret exists
   kubernetes.core.k8s_info:
@@ -111,5 +125,7 @@
 
 - name: "model preconditions: PASSED"
   ansible.builtin.debug:
-    msg: "KServe CRDs present, GPU node ready, pull secret exists, namespace in mesh."
+    msg: >-
+      KServe CRDs present, pull secret exists, namespace in mesh.
+      {{ 'GPU node ready.' if (_expect_nodes | bool) else 'GPU node will autoscale on deploy.' }}
   when: _deploy_needed | bool

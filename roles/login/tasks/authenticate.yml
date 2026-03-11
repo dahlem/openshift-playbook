@@ -109,12 +109,29 @@
         mode: "0600"
       no_log: true
 
+    - name: Find vault password file
+      ansible.builtin.set_fact:
+        _vault_pass_file: >-
+          {{ lookup('env', 'ANSIBLE_VAULT_PASSWORD_FILE')
+             | default(lookup('config', 'DEFAULT_VAULT_PASSWORD_FILE', default=''), true) }}
+
     - name: Encrypt cluster credentials file
       ansible.builtin.command:
         cmd: >-
           ansible-vault encrypt
+          {{ ('--vault-password-file=' ~ _vault_pass_file) if (_vault_pass_file | length > 0) else '' }}
           {{ inventory_dir }}/group_vars/all/cluster_credentials.yml
       changed_when: true
+      when: _vault_pass_file | length > 0
+
+    - name: Warn if credentials not encrypted
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: cluster_credentials.yml written but NOT encrypted.
+          No vault password file found. Encrypt manually:
+            ansible-vault encrypt {{ inventory_dir }}/group_vars/all/cluster_credentials.yml
+          Or create .vault_pass to automate this.
+      when: _vault_pass_file | length == 0
 
     - name: Wait for cluster-admin to propagate
       ansible.builtin.command: >-

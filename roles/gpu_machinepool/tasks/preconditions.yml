@@ -9,7 +9,7 @@
 
 - name: Resolve GPU instance type
   ansible.builtin.set_fact:
-    _gpu_instance_type: "{{ gpu_instance_type | default(_gpu_instance_type) }}"
+    _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
 
 - name: Determine if nodes are expected at rest
   ansible.builtin.set_fact:

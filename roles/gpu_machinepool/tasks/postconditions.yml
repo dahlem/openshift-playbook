@@ -15,9 +15,9 @@
 
 - name: Assert pool instance type
   ansible.builtin.assert:
-    that: _pool.instance_type == _gpu_instance_type
+    that: _pool.aws_node_pool.instance_type == _gpu_instance_type
     fail_msg: >-
-      GPU pool {{ gpu_pool_name }} has instance type {{ _pool.instance_type }},
+      GPU pool {{ gpu_pool_name }} has instance type {{ _pool.aws_node_pool.instance_type }},
       expected {{ _gpu_instance_type }}.
 
 # --- Node verification (only when nodes are expected) ---

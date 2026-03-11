@@ -31,6 +31,12 @@
     that: _cp_crd.resources | length > 0
     fail_msg: "ClusterPolicy CRD not found. Run the operators step first."
 
+- name: Determine if GPU nodes are expected at rest
+  ansible.builtin.set_fact:
+    _expect_nodes: >-
+      {{ not (gpu_pool_autoscaling | default(true) | bool)
+         or (gpu_pool_min_replicas | default(0) | int) > 0 }}
+
 - name: Verify GPU node exists
   kubernetes.core.k8s_info:
     kind: Node
@@ -44,6 +50,12 @@
       _gpu_node.resources | length > 0 and
       (_gpu_node.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
     fail_msg: "No Ready GPU node. Run the gpu_machinepool step first."
+  when: _expect_nodes | bool
+
+- name: "gpu_stack: autoscaling min=0, GPU node not required at rest"
+  ansible.builtin.debug:
+    msg: "GPU pool autoscales from 0 — nodes will spin up when workloads request GPUs."
+  when: not (_expect_nodes | bool)
 
 - name: Check if NFD instance already exists
   kubernetes.core.k8s_info:
@@ -69,10 +81,11 @@
   changed_when: false
   failed_when: false
   when:
+    - _expect_nodes | bool
     - _pre_nfd_instance.resources | length > 0
     - _pre_clusterpolicy.resources | length > 0
 
-- name: Determine if deploy is needed
+- name: Determine if deploy is needed (nodes running)
   ansible.builtin.set_fact:
     _deploy_needed: >-
       {{ not (
@@ -80,6 +93,16 @@
         _pre_clusterpolicy.resources | length > 0 and
         (_pre_gpu_allocatable.stdout | default('0') | int > 0)
       ) }}
+  when: _expect_nodes | bool
+
+- name: Determine if deploy is needed (autoscaling idle)
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_nfd_instance.resources | length > 0 and
+        _pre_clusterpolicy.resources | length > 0
+      ) }}
+  when: not (_expect_nodes | bool)
 
 - name: "gpu_stack: already complete, skipping deploy."
   ansible.builtin.debug:
@@ -88,5 +111,9 @@
 
 - name: "gpu_stack preconditions: PASSED"
   ansible.builtin.debug:
-    msg: "NFD + GPU Operator CRDs present, GPU node {{ _gpu_node.resources[0].metadata.name }} is Ready."
+    msg: >-
+      NFD + GPU Operator CRDs present.
+      {{ 'GPU node ' ~ _gpu_node.resources[0].metadata.name ~ ' is Ready.'
+         if (_expect_nodes | bool) and (_gpu_node.resources | length > 0)
+         else 'GPU nodes will autoscale when workloads are scheduled.' }}
   when: _deploy_needed | bool

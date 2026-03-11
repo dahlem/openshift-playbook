@@ -16,33 +16,43 @@
     state: present
     src: "{{ role_path }}/templates/clusterpolicy.yml"
 
-- name: Wait for NFD to label GPU node
-  kubernetes.core.k8s_info:
-    kind: Node
-    label_selectors:
-      - "feature.node.kubernetes.io/pci-10de.present=true"
-  register: _nfd_labelled
-  until: _nfd_labelled.resources | length > 0
-  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
-  delay: 10
+- name: Wait for GPU node readiness
+  when: _expect_nodes | bool
+  block:
+    - name: Wait for NFD to label GPU node
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "feature.node.kubernetes.io/pci-10de.present=true"
+      register: _nfd_labelled
+      until: _nfd_labelled.resources | length > 0
+      retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+      delay: 10
 
-- name: Wait for GPU operator to register nvidia.com/gpu
-  kubernetes.core.k8s_info:
-    kind: Node
-    label_selectors:
-      - "nvidia.com/gpu.present=true"
-  register: _gpu_labelled
-  until: _gpu_labelled.resources | length > 0
-  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
-  delay: 10
+    - name: Wait for GPU operator to register nvidia.com/gpu
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "nvidia.com/gpu.present=true"
+      register: _gpu_labelled
+      until: _gpu_labelled.resources | length > 0
+      retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+      delay: 10
 
-- name: Wait for GPU to be allocatable
-  ansible.builtin.command:
-    cmd: >-
-      oc get node {{ _gpu_labelled.resources[0].metadata.name }}
-      -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
-  register: _gpu_allocatable
-  changed_when: false
-  until: _gpu_allocatable.stdout | int > 0
-  retries: 30
-  delay: 10
+    - name: Wait for GPU to be allocatable
+      ansible.builtin.command:
+        cmd: >-
+          oc get node {{ _gpu_labelled.resources[0].metadata.name }}
+          -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
+      register: _gpu_allocatable
+      changed_when: false
+      until: _gpu_allocatable.stdout | int > 0
+      retries: 30
+      delay: 10
+
+- name: "gpu_stack: NFD + ClusterPolicy created (nodes will be labelled on scale-up)"
+  ansible.builtin.debug:
+    msg: >-
+      GPU stack configured. No GPU nodes running (autoscaling min=0).
+      NFD and GPU operator will label nodes automatically when they scale up.
+  when: not (_expect_nodes | bool)
