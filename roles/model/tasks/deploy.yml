@@ -77,7 +77,7 @@
           autoscaling.knative.dev/target: "10"
           autoscaling.knative.dev/metric: concurrency
           autoscaling.knative.dev/minScale: "1"
-          autoscaling.knative.dev/maxScale: "{{ gpu_pool_max_replicas | default(4) }}"
+          autoscaling.knative.dev/maxScale: "{{ gpu_pool_max_replicas | default(4) | string }}"
           autoscaling.knative.dev/scaleDownDelay: "300s"
           autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
           serving.knative.dev/timeoutSeconds: "900"
