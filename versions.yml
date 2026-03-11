@@ -14,7 +14,7 @@ operators:
     source: redhat-operators
     package: nfd
   gpu:
-    channel: v24.9
+    channel: v25.3
     source: certified-operators
     package: gpu-operator-certified
   serverless:
