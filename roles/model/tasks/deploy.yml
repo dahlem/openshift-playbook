@@ -141,3 +141,22 @@
      | list | length > 0)
   retries: "{{ (model_wait_timeout | int / 15) | int }}"
   delay: 15
+
+- name: Wait for inference route to be created
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: istio-system
+    name: "{{ model_name }}-default"
+  register: _route
+  until: _route.resources | length > 0
+  retries: 20
+  delay: 5
+
+- name: Set route timeout for long inference requests
+  ansible.builtin.command:
+    cmd: >-
+      oc annotate route {{ model_name }}-default -n istio-system
+      haproxy.router.openshift.io/timeout={{ route_timeout | default('600s') }}
+      --overwrite
+  changed_when: true
