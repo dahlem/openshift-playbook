@@ -5,28 +5,17 @@
 - name: Verify GPU node labelling
   when: _expect_nodes | bool
   block:
-    # NVIDIA GPUs appear as PCI class 0300 (VGA) or 0302 (3D controller).
-    # Match any node with an NFD label containing vendor 10de.
-    - name: Wait for NFD to label GPU node
-      ansible.builtin.shell:
-        cmd: >-
-          oc get nodes -l 'node.kubernetes.io/instance-type={{ _gpu_instance_type }}'
-          -o json |
-          python3 -c "import json,sys; data=json.load(sys.stdin);
-          nodes=[n['metadata']['name'] for n in data.get('items',[])
-                 if any('10de' in k for k in n.get('metadata',{}).get('labels',{}))];
-          print(' '.join(nodes) if nodes else '')"
-      register: _nfd_nodes_raw
-      changed_when: false
-      until: _nfd_nodes_raw.stdout | trim | length > 0
-      retries: 40
-      delay: 15
-
-    - name: Get NFD-labelled GPU node details
+    # nvidia.com/gpu.present is set by the GPU operator regardless of
+    # instance type, PCI class, or GPU generation.
+    - name: Wait for GPU operator to label a node
       kubernetes.core.k8s_info:
         kind: Node
-        name: "{{ _nfd_nodes_raw.stdout.split()[0] }}"
+        label_selectors:
+          - "nvidia.com/gpu.present=true"
       register: _nfd_nodes
+      until: _nfd_nodes.resources | length > 0
+      retries: 40
+      delay: 15
 
     - name: Wait for nvidia.com/gpu to become allocatable
       ansible.builtin.command:
