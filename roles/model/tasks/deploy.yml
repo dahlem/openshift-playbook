@@ -98,7 +98,9 @@
         annotations:
           autoscaling.knative.dev/target: "{{ knative_concurrency_target | default('10') }}"
           autoscaling.knative.dev/metric: concurrency
+          autoscaling.knative.dev/min-scale: "{{ gpu_pool_min_replicas | default(1) | string }}"
           autoscaling.knative.dev/minScale: "{{ gpu_pool_min_replicas | default(1) | string }}"
+          autoscaling.knative.dev/max-scale: "{{ gpu_pool_max_replicas | default(4) | string }}"
           autoscaling.knative.dev/maxScale: "{{ gpu_pool_max_replicas | default(4) | string }}"
           autoscaling.knative.dev/scaleDownDelay: "300s"
           autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
