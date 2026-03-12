@@ -1,7 +1,10 @@
 ---
 - name: Remove Helm releases
-  ansible.builtin.command:
-    cmd: helm uninstall {{ item }} -n {{ llmd_namespace }}
+  kubernetes.core.helm:
+    name: "{{ item }}"
+    release_namespace: "{{ llmd_namespace }}"
+    state: absent
+    wait: true
   loop:
     - ms-pd
     - gaie-pd

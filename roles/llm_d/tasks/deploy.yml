@@ -34,74 +34,51 @@
 
 # --- 1. Infrastructure chart (CRDs, EPP) ---
 
-- name: Add llm-d Helm repos
-  ansible.builtin.command:
-    cmd: "{{ item }}"
-  loop:
-    - helm repo add llm-d-modelservice {{ llmd_modelservice_repo }}
-    - helm repo update
-  changed_when: true
-
 - name: Deploy llm-d infra
-  ansible.builtin.command:
-    cmd: >-
-      helm upgrade --install infra-pd {{ llmd_infra_chart }}
-      --namespace {{ llmd_namespace }}
-      --wait --timeout 5m
-  changed_when: true
+  kubernetes.core.helm:
+    name: infra-pd
+    chart_ref: "{{ llmd_infra_chart }}"
+    release_namespace: "{{ llmd_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: 5m
 
 # --- 2. Model service (prefill + decode workers) ---
 
-- name: Build prefill vLLM args
-  ansible.builtin.set_fact:
-    _prefill_vllm_args: >-
-      {{
-        [
-          '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
-          '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
-          '--trust-remote-code',
-        ]
-        + (prefill_vllm_extra_args | default([]))
-      }}
-
-- name: Build decode vLLM args
-  ansible.builtin.set_fact:
-    _decode_vllm_args: >-
-      {{
-        [
-          '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
-          '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
-          '--trust-remote-code',
-        ]
-        + (decode_vllm_extra_args | default([]))
-      }}
-
 - name: Deploy model service
-  ansible.builtin.command:
-    cmd: >-
-      helm upgrade --install ms-pd {{ llmd_modelservice_chart }}
-      --repo {{ llmd_modelservice_repo }}
-      --namespace {{ llmd_namespace }}
-      --set modelArtifacts.uri={{ model_storage_uri }}
-      --set modelArtifacts.name={{ model_name }}
-      --set prefill.replicas={{ prefill_replicas }}
-      --set prefill.parallelism.tensor={{ prefill_tensor_parallel_size }}
-      --set decode.replicas={{ decode_replicas }}
-      --set decode.parallelism.tensor={{ decode_tensor_parallel_size }}
-      --set accelerator.type=nvidia
-      --wait --timeout 15m
-  changed_when: true
+  kubernetes.core.helm:
+    name: ms-pd
+    chart_ref: "{{ llmd_modelservice_chart }}"
+    chart_repo_url: "{{ llmd_modelservice_repo }}"
+    release_namespace: "{{ llmd_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: 15m
+    values:
+      modelArtifacts:
+        uri: "{{ model_storage_uri }}"
+        name: "{{ model_name }}"
+      accelerator:
+        type: nvidia
+      prefill:
+        replicas: "{{ prefill_replicas }}"
+        parallelism:
+          tensor: "{{ prefill_tensor_parallel_size }}"
+      decode:
+        replicas: "{{ decode_replicas }}"
+        parallelism:
+          tensor: "{{ decode_tensor_parallel_size }}"
 
 # --- 3. GAIE InferencePool ---
 
 - name: Deploy InferencePool
-  ansible.builtin.command:
-    cmd: >-
-      helm upgrade --install gaie-pd
-      oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool
-      --namespace {{ llmd_namespace }}
-      --wait --timeout 5m
-  changed_when: true
+  kubernetes.core.helm:
+    name: gaie-pd
+    chart_ref: oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool
+    release_namespace: "{{ llmd_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: 5m
 
 # --- 4. InferenceModel ---
 
