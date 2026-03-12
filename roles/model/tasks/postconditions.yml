@@ -30,15 +30,20 @@
 
 - name: "model postconditions: PASSED"
   ansible.builtin.debug:
-    msg: |
-      Model {{ model_name }} is ready!
-      URL: {{ _isvc.resources[0].status.url }}
-
-      Test:
-        curl -sk {{ _isvc.resources[0].status.url }}/v1/chat/completions \
-          -H 'Content-Type: application/json' \
-          -d '{"model":"{{ model_name }}","messages":[{"role":"user","content":"Hello"}]}'
-
-      Enable pod scale-to-zero (after verifying the model works):
-        oc annotate inferenceservice {{ model_name }} -n {{ model_namespace }} \
-          autoscaling.knative.dev/minScale=0 --overwrite
+    msg:
+      - ""
+      - "============================================================"
+      - "  {{ model_name }} is ready"
+      - "============================================================"
+      - ""
+      - "  Endpoint: {{ _isvc.resources[0].status.url }}"
+      - "  Model:    {{ model_name }}"
+      - "  GPUs:     {{ gpu_pool_min_replicas | default(1) }}x {{ _gpu_instance_type | default('unknown') }}"
+      - ""
+      - "  Test:"
+      - "    curl -sk {{ _isvc.resources[0].status.url }}/v1/chat/completions \\"
+      - "      -H 'Content-Type: application/json' \\"
+      - "      -d '{\"model\":\"{{ model_name }}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'"
+      - ""
+      - "============================================================"
+      - ""
