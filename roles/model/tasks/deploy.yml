@@ -73,6 +73,19 @@
               periodSeconds: 10
               failureThreshold: 3
 
+- name: Delete stale InferenceService (instance type changed)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ model_namespace }}"
+    name: "{{ model_name }}"
+    wait: true
+    wait_timeout: 120
+  when:
+    - _pre_isvc.resources | default([]) | length > 0
+    - (_isvc_instance_type | default('') | trim) != _gpu_instance_type
+
 - name: Create InferenceService
   kubernetes.core.k8s:
     state: present
