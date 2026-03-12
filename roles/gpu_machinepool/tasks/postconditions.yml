@@ -25,12 +25,18 @@
 - name: Verify nodes are running
   when: _expect_nodes | bool
   block:
-    - name: Assert pool has replicas
-      ansible.builtin.assert:
-        that: _pool.status.current_replicas | int >= 1
-        fail_msg: >-
-          GPU pool {{ gpu_pool_name }} has {{ _pool.status.current_replicas }} replicas,
-          expected >= 1. Message: {{ _pool.status.message | default('none') }}
+    - name: Wait for pool to have replicas
+      ansible.builtin.command:
+        cmd: rosa describe machinepool {{ gpu_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+      register: _pool_wait
+      changed_when: false
+      until: (_pool_wait.stdout | from_json).status.current_replicas | default(0) | int >= 1
+      retries: 40
+      delay: 15
+
+    - name: Refresh pool info
+      ansible.builtin.set_fact:
+        _pool: "{{ _pool_wait.stdout | from_json }}"
 
     - name: Check EC2 instances
       ansible.builtin.command:
