@@ -16,7 +16,7 @@
         [
           '--port=8080',
           '--model=/mnt/models',
-          '--served-model-name={{ model_name }}',
+          '--served-model-name=' ~ model_name,
           '--tensor-parallel-size=' ~ (vllm_tensor_parallel_size | default(1) | string),
           '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
           '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
