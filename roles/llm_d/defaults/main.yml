@@ -1,0 +1,40 @@
+---
+# llm-d defaults — override via scenarios
+
+# Namespace for llm-d components
+llmd_namespace: llm-d
+
+# Helm chart versions
+llmd_modelservice_chart: llm-d-modelservice
+llmd_modelservice_repo: https://llm-d-incubation.github.io/llm-d-modelservice/
+llmd_infra_chart: llm-d-infra
+llmd_gaie_chart: inferencepool
+
+# Gateway provider: istio | kgateway
+llmd_gateway_provider: istio
+
+# Prefill workers
+prefill_pool_name: gpu-prefill
+prefill_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+prefill_min_replicas: 1
+prefill_max_replicas: 2
+prefill_replicas: 2
+prefill_tensor_parallel_size: 1
+prefill_vllm_extra_args: []
+
+# Decode workers
+decode_pool_name: gpu-decode
+decode_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+decode_min_replicas: 1
+decode_max_replicas: 4
+decode_replicas: 2
+decode_tensor_parallel_size: 1
+decode_vllm_extra_args: []
+
+# Shared vLLM settings (applied to both prefill and decode unless overridden)
+vllm_max_model_len: 4096
+vllm_gpu_memory_utilization: "0.9"
+
+# Routing
+llmd_routing_strategy: prefix-aware
+llmd_pd_threshold: 0

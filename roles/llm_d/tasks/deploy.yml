@@ -1,0 +1,179 @@
+---
+# Deploy llm-d disaggregated inference stack using upstream Helm charts.
+#
+# Components:
+#   1. Namespace + HuggingFace token secret
+#   2. llm-d infra (CRDs, EPP, gateway config)
+#   3. llm-d modelservice (prefill + decode vLLM workers)
+#   4. GAIE InferencePool + InferenceModel
+#   5. HTTPRoute to connect gateway → InferencePool
+
+- name: Create llm-d namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ llmd_namespace }}"
+
+- name: Create HuggingFace token secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: llm-d-hf-token
+        namespace: "{{ llmd_namespace }}"
+      type: Opaque
+      stringData:
+        HF_TOKEN: "{{ hf_token }}"
+  when: hf_token is defined
+  no_log: true
+
+# --- 1. Infrastructure chart (CRDs, EPP) ---
+
+- name: Add llm-d Helm repos
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+  loop:
+    - helm repo add llm-d-modelservice {{ llmd_modelservice_repo }}
+    - helm repo update
+  changed_when: true
+
+- name: Deploy llm-d infra
+  ansible.builtin.command:
+    cmd: >-
+      helm upgrade --install infra-pd {{ llmd_infra_chart }}
+      --namespace {{ llmd_namespace }}
+      --wait --timeout 5m
+  changed_when: true
+
+# --- 2. Model service (prefill + decode workers) ---
+
+- name: Build prefill vLLM args
+  ansible.builtin.set_fact:
+    _prefill_vllm_args: >-
+      {{
+        [
+          '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
+          '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
+          '--trust-remote-code',
+        ]
+        + (prefill_vllm_extra_args | default([]))
+      }}
+
+- name: Build decode vLLM args
+  ansible.builtin.set_fact:
+    _decode_vllm_args: >-
+      {{
+        [
+          '--max-model-len=' ~ (vllm_max_model_len | default(4096) | string),
+          '--gpu-memory-utilization=' ~ (vllm_gpu_memory_utilization | default('0.9')),
+          '--trust-remote-code',
+        ]
+        + (decode_vllm_extra_args | default([]))
+      }}
+
+- name: Deploy model service
+  ansible.builtin.command:
+    cmd: >-
+      helm upgrade --install ms-pd {{ llmd_modelservice_chart }}
+      --repo {{ llmd_modelservice_repo }}
+      --namespace {{ llmd_namespace }}
+      --set modelArtifacts.uri={{ model_storage_uri }}
+      --set modelArtifacts.name={{ model_name }}
+      --set prefill.replicas={{ prefill_replicas }}
+      --set prefill.parallelism.tensor={{ prefill_tensor_parallel_size }}
+      --set decode.replicas={{ decode_replicas }}
+      --set decode.parallelism.tensor={{ decode_tensor_parallel_size }}
+      --set accelerator.type=nvidia
+      --wait --timeout 15m
+  changed_when: true
+
+# --- 3. GAIE InferencePool ---
+
+- name: Deploy InferencePool
+  ansible.builtin.command:
+    cmd: >-
+      helm upgrade --install gaie-pd
+      oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool
+      --namespace {{ llmd_namespace }}
+      --wait --timeout 5m
+  changed_when: true
+
+# --- 4. InferenceModel ---
+
+- name: Create InferenceModel
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: inference.networking.x-k8s.io/v1alpha2
+      kind: InferenceModel
+      metadata:
+        name: "{{ model_name }}"
+        namespace: "{{ llmd_namespace }}"
+      spec:
+        modelName: "{{ model_name }}"
+        criticality: Critical
+        poolRef:
+          name: "{{ model_name }}-pool"
+
+# --- 5. HTTPRoute ---
+
+- name: Create HTTPRoute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: HTTPRoute
+      metadata:
+        name: "{{ model_name }}-route"
+        namespace: "{{ llmd_namespace }}"
+      spec:
+        parentRefs:
+          - name: "{{ llmd_gateway_name | default('llm-d-gateway') }}"
+            namespace: "{{ llmd_namespace }}"
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /v1
+            backendRefs:
+              - group: inference.networking.x-k8s.io
+                kind: InferencePool
+                name: "{{ model_name }}-pool"
+                port: 8080
+
+- name: Wait for prefill pods to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ llmd_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/component=prefill"
+  register: _prefill_pods
+  until: >-
+    _prefill_pods.resources | length >= (prefill_replicas | int) and
+    (_prefill_pods.resources
+     | selectattr('status.phase', 'equalto', 'Running')
+     | list | length) >= (prefill_replicas | int)
+  retries: "{{ (model_wait_timeout | int / 15) | int }}"
+  delay: 15
+
+- name: Wait for decode pods to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ llmd_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/component=decode"
+  register: _decode_pods
+  until: >-
+    _decode_pods.resources | length >= (decode_replicas | int) and
+    (_decode_pods.resources
+     | selectattr('status.phase', 'equalto', 'Running')
+     | list | length) >= (decode_replicas | int)
+  retries: "{{ (model_wait_timeout | int / 15) | int }}"
+  delay: 15

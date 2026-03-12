@@ -1,0 +1,48 @@
+---
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Check llm-d namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ llmd_namespace }}"
+  register: _llmd_ns
+
+- name: Check for prefill GPU nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ prefill_instance_type }}"
+  register: _prefill_nodes
+
+- name: Check for decode GPU nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ decode_instance_type }}"
+  register: _decode_nodes
+
+- name: Check existing helm releases
+  ansible.builtin.command:
+    cmd: helm list -n {{ llmd_namespace }} -o json
+  register: _helm_releases
+  changed_when: false
+  failed_when: false
+
+- name: Determine if deployment is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ _llmd_ns.resources | length == 0 or
+         (_helm_releases.stdout | default('[]') | from_json | selectattr('name', 'equalto', 'ms-pd') | list | length == 0) }}
+
+- name: "llm_d preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: |
+      Namespace: {{ llmd_namespace }} ({{ 'exists' if _llmd_ns.resources | length > 0 else 'will be created' }})
+      Prefill nodes: {{ _prefill_nodes.resources | length }} ({{ prefill_instance_type }})
+      Decode nodes: {{ _decode_nodes.resources | length }} ({{ decode_instance_type }})
+      Deploy needed: {{ _deploy_needed }}

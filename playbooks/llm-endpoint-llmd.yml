@@ -1,0 +1,41 @@
+---
+# Disaggregated LLM inference with llm-d.
+#
+# Splits inference into separate prefill and decode GPU pools
+# for better throughput and predictable latency.
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/benchmark-llmd.yml
+#
+# Requires two GPU machine pools (prefill + decode), deployed via
+# the gpu_machinepool role called twice with different vars.
+
+- name: Full deployment (llm-d disaggregated)
+  hosts: localhost
+  roles:
+    - role: login
+    - role: rosa_cluster
+    - role: cluster_access
+
+    # Prefill GPU pool
+    - role: gpu_machinepool
+      vars:
+        gpu_pool_name: "{{ prefill_pool_name }}"
+        gpu_instance_type: "{{ prefill_instance_type }}"
+        gpu_pool_min_replicas: "{{ prefill_min_replicas }}"
+        gpu_pool_max_replicas: "{{ prefill_max_replicas }}"
+
+    # Decode GPU pool (skipped if same instance type + pool as prefill)
+    - role: gpu_machinepool
+      vars:
+        gpu_pool_name: "{{ decode_pool_name }}"
+        gpu_instance_type: "{{ decode_instance_type }}"
+        gpu_pool_min_replicas: "{{ decode_min_replicas }}"
+        gpu_pool_max_replicas: "{{ decode_max_replicas }}"
+      when: decode_pool_name != prefill_pool_name
+
+    - role: operators
+    - role: gpu_stack
+    - role: ai_platform
+    - role: pull_secret
+    - role: llm_d

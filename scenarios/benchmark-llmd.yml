@@ -1,0 +1,36 @@
+---
+# Disaggregated benchmark: prefill/decode on separate L40S pools.
+#
+# Target: ~15,000 completions in ~2 hours with reduced decode latency.
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/benchmark-llmd.yml
+
+# Model
+model_name: mistral-small-24b
+model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+
+# Prefill pool — fewer nodes, compute-bound work
+prefill_pool_name: gpu-prefill
+prefill_instance_type: g6e.xlarge
+prefill_min_replicas: 2
+prefill_max_replicas: 2
+prefill_replicas: 2
+prefill_tensor_parallel_size: 1
+prefill_vllm_extra_args:
+  - --enable-chunked-prefill
+  - --max-num-batched-tokens=4096
+
+# Decode pool — more nodes, bandwidth-bound work
+decode_pool_name: gpu-decode
+decode_instance_type: g6e.xlarge
+decode_min_replicas: 4
+decode_max_replicas: 6
+decode_replicas: 4
+decode_tensor_parallel_size: 1
+decode_vllm_extra_args:
+  - --kv-cache-dtype=fp8_e5m2
+
+# Shared
+vllm_max_model_len: 4096
+vllm_gpu_memory_utilization: "0.95"

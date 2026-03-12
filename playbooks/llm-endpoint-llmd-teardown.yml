@@ -1,0 +1,66 @@
+---
+# Tear down llm-d deployment in reverse dependency order.
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint-llmd-teardown.yml                               # workload only
+#   ansible-playbook playbooks/llm-endpoint-llmd-teardown.yml -e teardown_cluster=true       # everything
+#   ansible-playbook playbooks/llm-endpoint-llmd-teardown.yml -e @scenarios/benchmark-llmd.yml  # with pool names
+
+- name: Tear down (llm-d)
+  hosts: localhost
+  roles:
+    - role: login
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+      when: versions is not defined
+
+    - name: Remove llm-d stack
+      ansible.builtin.include_role:
+        name: llm_d
+        tasks_from: teardown
+
+    - name: Remove pull secret
+      ansible.builtin.include_role:
+        name: pull_secret
+        tasks_from: teardown
+
+    - name: Remove AI platform
+      ansible.builtin.include_role:
+        name: ai_platform
+        tasks_from: teardown
+
+    - name: Remove GPU stack
+      ansible.builtin.include_role:
+        name: gpu_stack
+        tasks_from: teardown
+
+    - name: Remove operators
+      ansible.builtin.include_role:
+        name: operators
+        tasks_from: teardown
+
+    - name: Remove prefill GPU pool
+      ansible.builtin.include_role:
+        name: gpu_machinepool
+        tasks_from: teardown
+      vars:
+        gpu_pool_name: "{{ prefill_pool_name }}"
+        _gpu_instance_type: "{{ prefill_instance_type }}"
+
+    - name: Remove decode GPU pool
+      ansible.builtin.include_role:
+        name: gpu_machinepool
+        tasks_from: teardown
+      vars:
+        gpu_pool_name: "{{ decode_pool_name }}"
+        _gpu_instance_type: "{{ decode_instance_type }}"
+      when: decode_pool_name != prefill_pool_name
+
+    - name: Remove ROSA cluster
+      ansible.builtin.include_role:
+        name: rosa_cluster
+        tasks_from: teardown
+      when: teardown_cluster | default(false) | bool

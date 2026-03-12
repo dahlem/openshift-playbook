@@ -1,0 +1,35 @@
+---
+- name: Remove Helm releases
+  ansible.builtin.command:
+    cmd: helm uninstall {{ item }} -n {{ llmd_namespace }}
+  loop:
+    - ms-pd
+    - gaie-pd
+    - infra-pd
+  failed_when: false
+
+- name: Remove HTTPRoute
+  kubernetes.core.k8s:
+    state: absent
+    api_version: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    namespace: "{{ llmd_namespace }}"
+    name: "{{ model_name }}-route"
+  failed_when: false
+
+- name: Remove InferenceModel
+  kubernetes.core.k8s:
+    state: absent
+    api_version: inference.networking.x-k8s.io/v1alpha2
+    kind: InferenceModel
+    namespace: "{{ llmd_namespace }}"
+    name: "{{ model_name }}"
+  failed_when: false
+
+- name: Remove llm-d namespace
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Namespace
+    name: "{{ llmd_namespace }}"
+  when: llmd_teardown_namespace | default(true) | bool

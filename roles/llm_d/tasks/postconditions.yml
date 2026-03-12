@@ -1,0 +1,75 @@
+---
+- name: Check prefill pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ llmd_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/component=prefill"
+  register: _prefill_pods
+
+- name: Check decode pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ llmd_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/component=decode"
+  register: _decode_pods
+
+- name: Assert prefill pods are running
+  ansible.builtin.assert:
+    that: >-
+      (_prefill_pods.resources
+       | selectattr('status.phase', 'equalto', 'Running')
+       | list | length) >= (prefill_replicas | int)
+    fail_msg: >-
+      Expected {{ prefill_replicas }} prefill pods running,
+      got {{ _prefill_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}.
+
+- name: Assert decode pods are running
+  ansible.builtin.assert:
+    that: >-
+      (_decode_pods.resources
+       | selectattr('status.phase', 'equalto', 'Running')
+       | list | length) >= (decode_replicas | int)
+    fail_msg: >-
+      Expected {{ decode_replicas }} decode pods running,
+      got {{ _decode_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}.
+
+- name: Check InferenceModel
+  kubernetes.core.k8s_info:
+    api_version: inference.networking.x-k8s.io/v1alpha2
+    kind: InferenceModel
+    namespace: "{{ llmd_namespace }}"
+    name: "{{ model_name }}"
+  register: _infmodel
+
+- name: Assert InferenceModel exists
+  ansible.builtin.assert:
+    that: _infmodel.resources | length > 0
+    fail_msg: "InferenceModel {{ model_name }} not found in {{ llmd_namespace }}."
+
+- name: Get gateway endpoint
+  ansible.builtin.command:
+    cmd: >-
+      kubectl get gateway {{ llmd_gateway_name | default('llm-d-gateway') }}
+      -n {{ llmd_namespace }} -o jsonpath='{.status.addresses[0].value}'
+  register: _gateway_ip
+  changed_when: false
+  failed_when: false
+
+- name: "llm_d postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: |
+      llm-d disaggregated inference is ready!
+
+      Prefill workers: {{ _prefill_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}/{{ prefill_replicas }} ({{ prefill_instance_type }})
+      Decode workers:  {{ _decode_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}/{{ decode_replicas }} ({{ decode_instance_type }})
+
+      Gateway: {{ _gateway_ip.stdout | default('pending') }}
+
+      Test:
+        curl -sk http://{{ _gateway_ip.stdout | default('<gateway-ip>') }}/v1/chat/completions \
+          -H 'Content-Type: application/json' \
+          -d '{"model":"{{ model_name }}","messages":[{"role":"user","content":"Hello"}]}'
