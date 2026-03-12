@@ -5,46 +5,38 @@
 - name: Verify GPU node labelling
   when: _expect_nodes | bool
   block:
-    - name: Verify NFD labels on GPU node
+    - name: Wait for NFD to label GPU node
       kubernetes.core.k8s_info:
         kind: Node
         label_selectors:
           - "feature.node.kubernetes.io/pci-10de.present=true"
       register: _nfd_nodes
+      until: _nfd_nodes.resources | length > 0
+      retries: 40
+      delay: 15
 
-    - name: Assert NFD labelled at least one node
-      ansible.builtin.assert:
-        that: _nfd_nodes.resources | length > 0
-        fail_msg: "No node has NFD GPU label (pci-10de.present=true). NFD may have failed."
-
-    - name: Verify nvidia.com/gpu is allocatable
+    - name: Wait for nvidia.com/gpu to become allocatable
       ansible.builtin.command:
         cmd: >-
           oc get node {{ _nfd_nodes.resources[0].metadata.name }}
           -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
       register: _gpu_count
       changed_when: false
+      until: (_gpu_count.stdout | default('0') | int) > 0
+      retries: 40
+      delay: 15
 
-    - name: Assert GPU is allocatable
-      ansible.builtin.assert:
-        that: _gpu_count.stdout | int > 0
-        fail_msg: >-
-          nvidia.com/gpu=0 on {{ _nfd_nodes.resources[0].metadata.name }}.
-          GPU operator may still be installing drivers.
-
-- name: Verify ClusterPolicy is ready
+- name: Wait for ClusterPolicy to become ready
   kubernetes.core.k8s_info:
     api_version: nvidia.com/v1
     kind: ClusterPolicy
     name: gpu-cluster-policy
   register: _cp
-
-- name: Assert ClusterPolicy state
-  ansible.builtin.assert:
-    that: >-
-      _cp.resources | length > 0 and
-      _cp.resources[0].status.state | default('') == 'ready'
-    fail_msg: "ClusterPolicy not in 'ready' state."
+  until: >-
+    _cp.resources | length > 0 and
+    (_cp.resources[0].status.state | default('')) == 'ready'
+  retries: 40
+  delay: 15
   when: _expect_nodes | bool
 
 - name: Assert ClusterPolicy exists
