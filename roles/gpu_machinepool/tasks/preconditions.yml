@@ -39,20 +39,35 @@
     that: _oc_whoami.rc == 0
     fail_msg: "Not logged in via oc. Run: oc login ..."
 
-- name: Verify GPU instance type available in AZ
+- name: Resolve subnet availability zone
+  ansible.builtin.command: >-
+    aws ec2 describe-subnets
+    --subnet-ids {{ rosa_private_subnet }}
+    --query 'Subnets[0].AvailabilityZone' --output text
+    --region {{ aws_region }}
+  register: _subnet_az
+  changed_when: false
+
+- name: Verify GPU instance type available in subnet AZ
   ansible.builtin.command: >-
     aws ec2 describe-instance-type-offerings
     --location-type availability-zone
-    --filters Name=instance-type,Values={{ _gpu_instance_type }}
+    --filters Name=instance-type,Values={{ _gpu_instance_type }} Name=location,Values={{ _subnet_az.stdout }}
     --query 'InstanceTypeOfferings[*].Location' --output json
     --region {{ aws_region }}
   register: _az_check
   changed_when: false
 
-- name: Assert GPU type available
+- name: Assert GPU type available in subnet AZ
   ansible.builtin.assert:
     that: (_az_check.stdout | from_json | length) > 0
-    fail_msg: "{{ _gpu_instance_type }} not available in {{ aws_region }}."
+    fail_msg: >-
+      {{ _gpu_instance_type }} is not available in {{ _subnet_az.stdout }}
+      (subnet {{ rosa_private_subnet }}).
+      Available AZs: check with
+      aws ec2 describe-instance-type-offerings --location-type availability-zone
+      --filters Name=instance-type,Values={{ _gpu_instance_type }} --region {{ aws_region }}
+      --query 'InstanceTypeOfferings[*].Location' --output text
 
 - name: Count subnet tags
   ansible.builtin.command: >-
