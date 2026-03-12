@@ -5,8 +5,10 @@
   register: _gpu_pool_info
   changed_when: false
   failed_when: false
-  until: _gpu_pool_info.rc != 0 or ('being deleted' not in (_gpu_pool_info.stderr | default('')))
-  retries: 20
+  until: >-
+    _gpu_pool_info.rc != 0 or
+    'deleting' not in (_gpu_pool_info.stdout | default('') | lower)
+  retries: 40
   delay: 15
 
 - name: Create GPU machine pool (autoscaling)
