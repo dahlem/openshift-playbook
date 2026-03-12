@@ -24,6 +24,10 @@
       --taints {{ gpu_pool_taint }}
       --labels node.kubernetes.io/instance-type={{ _gpu_instance_type }}
       --subnet={{ rosa_private_subnet }}
+  register: _create_pool
+  until: _create_pool.rc == 0
+  retries: 20
+  delay: 30
   when:
     - _gpu_pool_info.rc != 0
     - gpu_pool_autoscaling | default(true) | bool
@@ -39,6 +43,10 @@
       --taints {{ gpu_pool_taint }}
       --labels node.kubernetes.io/instance-type={{ _gpu_instance_type }}
       --subnet={{ rosa_private_subnet }}
+  register: _create_pool
+  until: _create_pool.rc == 0
+  retries: 20
+  delay: 30
   when:
     - _gpu_pool_info.rc != 0
     - not (gpu_pool_autoscaling | default(true) | bool)
