@@ -31,25 +31,27 @@
     that: _cp_crd.resources | length > 0
     fail_msg: "ClusterPolicy CRD not found. Run the operators step first."
 
+- name: Resolve GPU instance type
+  ansible.builtin.set_fact:
+    _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+
 - name: Determine if GPU nodes are expected at rest
   ansible.builtin.set_fact:
     _expect_nodes: >-
       {{ not (gpu_pool_autoscaling | default(true) | bool)
          or (gpu_pool_min_replicas | default(0) | int) > 0 }}
 
-- name: Verify GPU node exists
+- name: Wait for GPU node to become Ready
   kubernetes.core.k8s_info:
     kind: Node
     label_selectors:
-      - "node.kubernetes.io/instance-type={{ versions.infrastructure.gpu_instance_type }}"
+      - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
   register: _gpu_node
-
-- name: Assert GPU node is Ready
-  ansible.builtin.assert:
-    that: >-
-      _gpu_node.resources | length > 0 and
-      (_gpu_node.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
-    fail_msg: "No Ready GPU node. Run the gpu_machinepool step first."
+  until: >-
+    _gpu_node.resources | length > 0 and
+    (_gpu_node.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
+  retries: 40
+  delay: 15
   when: _expect_nodes | bool
 
 - name: "gpu_stack: autoscaling min=0, GPU node not required at rest"
@@ -75,7 +77,7 @@
 - name: Check if GPU is already allocatable
   ansible.builtin.command:
     cmd: >-
-      oc get nodes -l node.kubernetes.io/instance-type={{ versions.infrastructure.gpu_instance_type }}
+      oc get nodes -l node.kubernetes.io/instance-type={{ _gpu_instance_type }}
       -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}'
   register: _pre_gpu_allocatable
   changed_when: false
