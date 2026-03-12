@@ -69,6 +69,60 @@
       --filters Name=instance-type,Values={{ _gpu_instance_type }} --region {{ aws_region }}
       --query 'InstanceTypeOfferings[*].Location' --output text
 
+- name: Resolve instance vCPU count
+  ansible.builtin.command: >-
+    aws ec2 describe-instance-types
+    --instance-types {{ _gpu_instance_type }}
+    --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' --output text
+    --region {{ aws_region }}
+  register: _instance_vcpus
+  changed_when: false
+
+- name: Resolve quota code for instance family
+  ansible.builtin.set_fact:
+    _quota_code: >-
+      {{ 'L-DB2E81BA' if _gpu_instance_type.startswith('g')
+         else 'L-417A185B' if _gpu_instance_type.startswith('p')
+         else '' }}
+    _quota_family: >-
+      {{ 'G and VT' if _gpu_instance_type.startswith('g')
+         else 'P' if _gpu_instance_type.startswith('p')
+         else 'unknown' }}
+
+- name: Get vCPU quota for instance family
+  ansible.builtin.command: >-
+    aws service-quotas get-service-quota
+    --service-code ec2
+    --quota-code {{ _quota_code }}
+    --query 'Quota.Value' --output text
+    --region {{ aws_region }}
+  register: _vcpu_quota
+  changed_when: false
+  when: _quota_code | trim | length > 0
+
+- name: Calculate vCPU requirements
+  ansible.builtin.set_fact:
+    _vcpus_per_node: "{{ _instance_vcpus.stdout | int }}"
+    _vcpus_needed: "{{ (_instance_vcpus.stdout | int) * (gpu_pool_max_replicas | default(4) | int) }}"
+    _vcpu_limit: "{{ _vcpu_quota.stdout | default('0') | float | int }}"
+  when: _quota_code | trim | length > 0
+
+- name: Assert sufficient vCPU quota
+  ansible.builtin.assert:
+    that: (_vcpu_limit | int) >= (_vcpus_needed | int)
+    fail_msg: |
+      Insufficient vCPU quota for {{ _gpu_instance_type }} in {{ aws_region }}.
+
+      Quota ({{ _quota_family }} On-Demand): {{ _vcpu_limit }} vCPUs
+      Needed for {{ gpu_pool_max_replicas | default(4) }} × {{ _gpu_instance_type }}: {{ _vcpus_needed }} vCPUs ({{ _vcpus_per_node }} vCPUs each)
+
+      Request an increase:
+        aws service-quotas request-service-quota-increase \
+          --service-code ec2 --quota-code {{ _quota_code }} \
+          --desired-value {{ _vcpus_needed }} \
+          --region {{ aws_region }}
+  when: _quota_code | trim | length > 0
+
 - name: Count subnet tags
   ansible.builtin.command: >-
     aws ec2 describe-tags
