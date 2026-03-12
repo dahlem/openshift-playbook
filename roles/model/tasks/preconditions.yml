@@ -53,11 +53,7 @@
   ansible.builtin.assert:
     that: >-
       _gpu_nodes.resources | length > 0 and
-      (_gpu_nodes.resources | selectattr('status.conditions', 'defined')
-       | map(attribute='status.conditions')
-       | map('selectattr', 'type', 'equalto', 'Ready')
-       | map('selectattr', 'status', 'equalto', 'True')
-       | map('list') | select('length') | list | length > 0)
+      (_gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
     fail_msg: "No Ready GPU node with nvidia.com/gpu.present=true label found."
   when: _expect_nodes | bool
 
