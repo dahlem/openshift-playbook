@@ -19,13 +19,30 @@
 - name: Wait for GPU node readiness
   when: _expect_nodes | bool
   block:
+    # NVIDIA GPUs appear as PCI class 0300 (VGA) or 0302 (3D controller)
+    # depending on instance type. Check for either label.
     - name: Wait for NFD to label GPU node
-      kubernetes.core.k8s_info:
-        kind: Node
-        label_selectors:
-          - "feature.node.kubernetes.io/pci-10de.present=true"
+      ansible.builtin.command:
+        cmd: >-
+          oc get nodes
+          -l 'node.kubernetes.io/instance-type={{ _gpu_instance_type }}'
+          -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}'
       register: _nfd_labelled
-      until: _nfd_labelled.resources | length > 0
+      changed_when: false
+      until: _nfd_labelled.stdout | trim | length > 0
+      retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+      delay: 10
+
+    - name: Check for NVIDIA PCI label on GPU nodes
+      ansible.builtin.shell:
+        cmd: >-
+          oc get node {{ _nfd_labelled.stdout.split()[0] }}
+          -o jsonpath='{.metadata.labels}' |
+          python3 -c "import json,sys; labels=json.load(sys.stdin);
+          print('true' if any('10de' in k for k in labels) else 'false')"
+      register: _nfd_pci_check
+      changed_when: false
+      until: _nfd_pci_check.stdout | trim == 'true'
       retries: "{{ (crd_wait_timeout | int / 10) | int }}"
       delay: 10
 
