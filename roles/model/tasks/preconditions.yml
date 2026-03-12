@@ -1,6 +1,16 @@
 ---
 # Pre: KServe ready, GPU node available, pull secret linked
 
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Resolve GPU instance type
+  ansible.builtin.set_fact:
+    _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
+
 - name: Verify oc login
   ansible.builtin.command: oc whoami
   register: _oc_whoami
@@ -42,19 +52,55 @@
       {{ not (gpu_pool_autoscaling | default(true) | bool)
          or (gpu_pool_min_replicas | default(0) | int) > 0 }}
 
-- name: Check GPU node is available
+- name: Check GPU nodes matching requested instance type
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ _gpu_instance_type }}"
+      - "nvidia.com/gpu.present=true"
+  register: _gpu_nodes
+  when: _expect_nodes | bool
+
+- name: Get all GPU nodes for diagnostic (on mismatch)
   kubernetes.core.k8s_info:
     kind: Node
     label_selectors:
       - "nvidia.com/gpu.present=true"
-  register: _gpu_nodes
+  register: _all_gpu_nodes
+  when:
+    - _expect_nodes | bool
+    - _gpu_nodes.resources | length == 0
 
-- name: Assert at least one GPU node is Ready
+- name: Fail with instance type mismatch
+  ansible.builtin.fail:
+    msg: |
+      No GPU node of type {{ _gpu_instance_type }} found on cluster.
+
+      Available GPU nodes:
+      {% for node in _all_gpu_nodes.resources %}
+        - {{ node.metadata.name }} ({{ node.metadata.labels['node.kubernetes.io/instance-type'] }})
+      {% endfor %}
+
+      Fix: re-run with the correct instance type:
+        ansible-playbook playbooks/llm-endpoint.yml -e gpu_instance_type={{ _all_gpu_nodes.resources[0].metadata.labels['node.kubernetes.io/instance-type'] }}
+  when:
+    - _expect_nodes | bool
+    - _gpu_nodes.resources | length == 0
+    - _all_gpu_nodes.resources | length > 0
+
+- name: Fail — no GPU nodes at all
+  ansible.builtin.fail:
+    msg: "No GPU nodes found on cluster. Run the gpu_machinepool step first."
+  when:
+    - _expect_nodes | bool
+    - _gpu_nodes.resources | length == 0
+    - _all_gpu_nodes.resources | length == 0
+
+- name: Assert GPU node is Ready
   ansible.builtin.assert:
     that: >-
-      _gpu_nodes.resources | length > 0 and
-      (_gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0)
-    fail_msg: "No Ready GPU node with nvidia.com/gpu.present=true label found."
+      _gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0
+    fail_msg: "GPU node of type {{ _gpu_instance_type }} exists but is not Ready."
   when: _expect_nodes | bool
 
 - name: "model: GPU pool autoscales from 0 — node will provision when model is deployed"
@@ -97,11 +143,18 @@
     name: "{{ model_name }}"
   register: _pre_isvc
 
+- name: Check if existing InferenceService targets correct instance type
+  ansible.builtin.set_fact:
+    _isvc_instance_type: >-
+      {{ _pre_isvc.resources[0].spec.predictor.nodeSelector['node.kubernetes.io/instance-type'] | default('') }}
+  when: _pre_isvc.resources | length > 0
+
 - name: Determine if deploy is needed
   ansible.builtin.set_fact:
     _deploy_needed: >-
       {{ not (
         _pre_isvc.resources | length > 0 and
+        (_isvc_instance_type | default('') | trim) == _gpu_instance_type and
         _pre_isvc.resources[0].status is defined and
         _pre_isvc.resources[0].status.conditions is defined and
         (_pre_isvc.resources[0].status.conditions
@@ -111,6 +164,15 @@
         _pre_isvc.resources[0].status.url is defined and
         _pre_isvc.resources[0].status.url | length > 0
       ) }}
+
+- name: "model: instance type changed, will redeploy"
+  ansible.builtin.debug:
+    msg: >-
+      InferenceService targets {{ _isvc_instance_type | trim }} but
+      requested {{ _gpu_instance_type }}. Will redeploy.
+  when:
+    - _pre_isvc.resources | length > 0
+    - (_isvc_instance_type | default('') | trim) != _gpu_instance_type
 
 - name: "model: already complete, skipping deploy."
   ansible.builtin.debug:
