@@ -28,6 +28,24 @@
       _isvc.resources[0].status.url | length > 0
     fail_msg: "InferenceService {{ model_name }} has no URL."
 
+- name: Check route timeout annotation
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: istio-system
+    name: "{{ model_name }}-default"
+  register: _route
+
+- name: Ensure route timeout for long inference requests
+  ansible.builtin.command:
+    cmd: >-
+      oc annotate route {{ model_name }}-default -n istio-system
+      haproxy.router.openshift.io/timeout={{ route_timeout | default('600s') }}
+      --overwrite
+  register: _timeout_result
+  changed_when: _timeout_result.rc == 0
+  when: _route.resources | length > 0
+
 - name: "model postconditions: PASSED"
   ansible.builtin.debug:
     msg:

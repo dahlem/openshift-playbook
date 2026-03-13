@@ -10,12 +10,12 @@ versions_file: "{{ playbook_dir }}/../versions.yml"
 gpu_pool_name: gpu
 gpu_pool_autoscaling: true
 gpu_pool_min_replicas: 1          # ROSA requires min >= 1 when autoscaling is enabled
-gpu_pool_max_replicas: 4
+gpu_pool_max_replicas: 1
 gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"
 
 # Model Serving
-model_name: mistral-small-24b
-model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+model_name: mistral-7b
+model_storage_uri: "hf://RedHatAI/Mistral-7B-Instruct-v0.3-quantized.w4a16"
 model_namespace: default
 
 # vLLM Runtime Tuning
@@ -33,3 +33,22 @@ cluster_wait_timeout: 3600
 crd_wait_timeout: 600
 node_wait_timeout: 900
 model_wait_timeout: 1800
+
+# Batch Experiment Infrastructure
+batch_namespace: batch-experiments
+batch_gpu_quota: 8
+batch_cpu_quota: 32
+batch_memory_quota: 64Gi
+batch_service_account: batch-runner
+batch_results_pvc_name: batch-results
+batch_results_pvc_size: 50Gi
+batch_results_access_mode: ReadWriteMany
+batch_results_storage_class: gp3-csi
+batch_model_cache_enabled: true
+batch_model_cache_pvc_name: model-cache
+batch_model_cache_pvc_size: 100Gi
+batch_model_cache_models: []
+batch_model_cache_provider: huggingface
+batch_model_cache_token_secret: ""
+batch_workflow_operator_channel: stable
+batch_workflow_namespace: batch-experiments

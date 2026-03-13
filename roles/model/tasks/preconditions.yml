@@ -152,7 +152,8 @@
 - name: Determine if deploy is needed
   ansible.builtin.set_fact:
     _deploy_needed: >-
-      {{ not (
+      {{ (force_redeploy | default(false) | bool) or
+         not (
         _pre_isvc.resources | length > 0 and
         (_isvc_instance_type | default('') | trim) == _gpu_instance_type and
         _pre_isvc.resources[0].status is defined and

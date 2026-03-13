@@ -8,19 +8,19 @@
 #   - With chunked prefill and high concurrency → ~1,200-1,600 tok/s
 #
 # Usage:
-#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/benchmark.yml
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/mistral-24b-benchmark.yml
 
 # Model
 model_name: mistral-small-24b
 model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
 
 # Infrastructure — 4× L40S nodes
-gpu_instance_type: g6e.xlarge
+gpu_instance_type: g6e.2xlarge
 gpu_pool_min_replicas: 4
 gpu_pool_max_replicas: 4
 
-# vLLM — optimized for batched throughput
-vllm_max_model_len: 4096
+# vLLM — optimized for batched throughput with full 32k context
+vllm_max_model_len: 32768
 vllm_gpu_memory_utilization: "0.95"
 vllm_extra_args:
   - --enable-chunked-prefill

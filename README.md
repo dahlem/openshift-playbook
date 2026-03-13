@@ -10,22 +10,22 @@ serving. Re-run it safely at any time; it only changes what's needed.
 
 ```
 ============================================================
-  mistral-small-24b is ready
+  mistral-7b is ready
 ============================================================
 
-  Endpoint: https://mistral-small-24b.apps.rosa.my-cluster.p3.openshiftapps.com
-  Model:    mistral-small-24b
-  GPUs:     4x g6e.2xlarge (NVIDIA L40S)
+  Endpoint: https://mistral-7b.apps.rosa.my-cluster.p3.openshiftapps.com
+  Model:    mistral-7b
+  GPUs:     1x g6.xlarge (NVIDIA L4)
 
   Test:
-    curl -sk https://mistral-small-24b.apps.rosa.my-cluster.p3.openshiftapps.com/v1/chat/completions \
+    curl -sk https://mistral-7b.apps.rosa.my-cluster.p3.openshiftapps.com/v1/chat/completions \
       -H 'Content-Type: application/json' \
-      -d '{"model":"mistral-small-24b","messages":[{"role":"user","content":"Hello"}]}'
+      -d '{"model":"mistral-7b","messages":[{"role":"user","content":"Hello"}]}'
 
 ============================================================
 ```
 
-An OpenAI-compatible `/v1/chat/completions` endpoint, running on dedicated GPU nodes
+An OpenAI-compatible `/v1/chat/completions` endpoint, running on a dedicated GPU node
 with Knative autoscaling. Point any client, SDK, or benchmark tool at the URL.
 
 ## Quickstart
@@ -47,21 +47,24 @@ ansible-playbook playbooks/llm-endpoint-on-cluster.yml --ask-vault-pass
 
 ## Scenarios
 
-Switch GPU type, model, scale, or tuning by passing a scenario file — no code changes:
+By default, the playbook deploys **Mistral-7B** (quantized W4A16) on a single L4 GPU — fast
+to start, cheap to run, and good for development. Pass a scenario file to switch model,
+GPU type, or scale — no code changes:
 
 ```bash
 ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
-  -e @scenarios/benchmark.yml
+  -e @scenarios/mistral-24b-benchmark.yml
 ```
 
-| Scenario | GPUs | What it's for |
-|----------|------|---------------|
-| `mistral-small-24b.yml` | 1x L4 | Default — development and light usage |
-| `demo.yml` | 1x L4 (always on) | Demos — single pre-warmed node, no autoscaling |
-| `mistral-small-24b-large.yml` | 1-4x L40S | Full precision, 8k context, higher quality |
-| `benchmark.yml` | 4x L40S | Bulk throughput — 15k completions in ~2h |
-| `dev-llmd.yml` | 1+1 L4 | Dev — disaggregated prefill/decode (llm-d) |
-| `benchmark-llmd.yml` | 2+4 L40S | Benchmark — disaggregated prefill/decode |
+| Scenario | Model | GPUs | What it's for |
+|----------|-------|------|---------------|
+| *(default)* | Mistral-7B (W4A16) | 1x L4 | Development and light usage |
+| `mistral-24b.yml` | Mistral-Small-24B (W4A16) | 1x L4 | Higher quality, single GPU |
+| `mistral-24b-demo.yml` | Mistral-Small-24B (W4A16) | 1x L4 (always on) | Demos — no autoscaling |
+| `mistral-24b-large.yml` | Mistral-Small-24B (FP16) | 1-4x L40S | Full precision, 8k context |
+| `mistral-24b-benchmark.yml` | Mistral-Small-24B (W4A16) | 4x L40S | Bulk throughput, 32k context |
+| `mistral-24b-llmd-dev.yml` | Mistral-Small-24B (W4A16) | 1+1 L4 | Dev — disaggregated prefill/decode |
+| `mistral-24b-llmd-benchmark.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Benchmark — disaggregated |
 
 Create your own:
 
@@ -91,7 +94,7 @@ ansible-playbook playbooks/llm-endpoint-llmd.yml --ask-vault-pass
 ansible-playbook playbooks/gpu-scale.yml -e gpu_state=idle --ask-vault-pass
 
 # Scale GPUs back to active
-ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/mistral-24b-benchmark.yml --ask-vault-pass
 
 # Teardown workload (keeps cluster)
 ansible-playbook playbooks/llm-endpoint-teardown.yml --ask-vault-pass
@@ -210,7 +213,7 @@ Three overlay directories customize deployments without changing code:
 
 | Directory | What it overrides | Example |
 |-----------|-------------------|---------|
-| `scenarios/` | Model, GPU type, replica count, vLLM tuning | `-e @scenarios/benchmark.yml` |
+| `scenarios/` | Model, GPU type, replica count, vLLM tuning | `-e @scenarios/mistral-24b-benchmark.yml` |
 | `clusters/` | Cluster name, subnets, IAM, region | `-e @clusters/staging.yml` |
 | `profiles/` | OCM access grants (users + roles) | `-e @profiles/my-team.yml` |
 
@@ -219,7 +222,7 @@ Overlays compose:
 ```bash
 ansible-playbook playbooks/llm-endpoint-on-cluster.yml \
   -e @clusters/staging.yml \
-  -e @scenarios/benchmark.yml \
+  -e @scenarios/mistral-24b-benchmark.yml \
   -e @profiles/my-team.yml \
   --ask-vault-pass
 ```

@@ -2,7 +2,7 @@
 # Minimal llm-d dev scenario: 1 prefill + 1 decode on L4.
 #
 # Usage:
-#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/dev-llmd.yml
+#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/mistral-24b-llmd-dev.yml
 
 # Model
 model_name: mistral-small-24b

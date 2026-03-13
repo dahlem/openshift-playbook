@@ -73,7 +73,7 @@
               periodSeconds: 10
               failureThreshold: 3
 
-- name: Delete stale InferenceService (instance type changed)
+- name: Delete existing InferenceService (instance type changed or force redeploy)
   kubernetes.core.k8s:
     state: absent
     api_version: serving.kserve.io/v1beta1
@@ -84,7 +84,8 @@
     wait_timeout: 120
   when:
     - _pre_isvc.resources | default([]) | length > 0
-    - (_isvc_instance_type | default('') | trim) != _gpu_instance_type
+    - (force_redeploy | default(false) | bool) or
+      (_isvc_instance_type | default('') | trim) != _gpu_instance_type
 
 - name: Create InferenceService
   kubernetes.core.k8s:
@@ -100,12 +101,11 @@
           autoscaling.knative.dev/metric: concurrency
           autoscaling.knative.dev/scaleDownDelay: "300s"
           autoscaling.knative.dev/scaleToZeroPodRetention: "600s"
-          serving.knative.dev/timeoutSeconds: "900"
           serving.knative.dev/progress-deadline: "1800s"
       spec:
         predictor:
-          minReplicas: {{ gpu_pool_min_replicas | default(1) | int }}
-          maxReplicas: {{ gpu_pool_max_replicas | default(4) | int }}
+          minReplicas: "{{ gpu_pool_min_replicas | default(1) | int }}"
+          maxReplicas: "{{ gpu_pool_max_replicas | default(4) | int }}"
           tolerations:
             - key: nvidia.com/gpu
               operator: Equal
@@ -152,11 +152,3 @@
   until: _route.resources | length > 0
   retries: 20
   delay: 5
-
-- name: Set route timeout for long inference requests
-  ansible.builtin.command:
-    cmd: >-
-      oc annotate route {{ model_name }}-default -n istio-system
-      haproxy.router.openshift.io/timeout={{ route_timeout | default('600s') }}
-      --overwrite
-  changed_when: true
