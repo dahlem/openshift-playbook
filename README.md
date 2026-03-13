@@ -63,8 +63,7 @@ ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
 | `mistral-24b-demo.yml` | Mistral-Small-24B (W4A16) | 1x L4 (always on) | Demos — no autoscaling |
 | `mistral-24b-large.yml` | Mistral-Small-24B (FP16) | 1-4x L40S | Full precision, 8k context |
 | `mistral-24b-benchmark.yml` | Mistral-Small-24B (W4A16) | 4x L40S | Bulk throughput, 32k context |
-| `mistral-24b-llmd-dev.yml` | Mistral-Small-24B (W4A16) | 1+1 L4 | Dev — disaggregated prefill/decode |
-| `mistral-24b-llmd-benchmark.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Benchmark — disaggregated |
+| `mistral-24b-llmd-benchmark.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Disaggregated prefill/decode |
 
 Create your own:
 
