@@ -55,7 +55,7 @@
           trustyai:         { managementState: Managed }
           workbenches:      { managementState: Managed }
 
-- name: Set Knative default revision timeout
+- name: Set Knative revision timeouts
   kubernetes.core.k8s:
     state: present
     definition:
@@ -66,6 +66,7 @@
         namespace: knative-serving
       data:
         revision-timeout-seconds: "{{ knative_revision_timeout | default('600') }}"
+        revision-response-start-timeout-seconds: "{{ knative_revision_timeout | default('600') }}"
     merge_type: merge
 
 - name: Wait for KServe CRD
