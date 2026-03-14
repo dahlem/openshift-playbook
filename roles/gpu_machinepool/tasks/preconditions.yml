@@ -107,19 +107,38 @@
     _vcpu_limit: "{{ _vcpu_quota.stdout | default('0') | float | int }}"
   when: _quota_code | trim | length > 0
 
+- name: Count in-use vCPUs for instance family
+  ansible.builtin.command: >-
+    aws ec2 describe-instances
+    --filters "Name=instance-state-name,Values=running,pending"
+    --query 'Reservations[].Instances[?starts_with(InstanceType, `{{ _gpu_instance_type[0] }}`)]
+      | [].VCpuInfo.CurrentVCpus' --output json
+    --region {{ aws_region }}
+  register: _vcpus_in_use_raw
+  changed_when: false
+  when: _quota_code | trim | length > 0
+
+- name: Calculate available vCPUs
+  ansible.builtin.set_fact:
+    _vcpus_in_use: "{{ (_vcpus_in_use_raw.stdout | from_json | sum) | default(0) | int }}"
+    _vcpus_available: "{{ (_vcpu_limit | int) - ((_vcpus_in_use_raw.stdout | from_json | sum) | default(0) | int) }}"
+  when: _quota_code | trim | length > 0
+
 - name: Assert sufficient vCPU quota
   ansible.builtin.assert:
-    that: (_vcpu_limit | int) >= (_vcpus_needed | int)
+    that: (_vcpus_available | int) >= (_vcpus_needed | int)
     fail_msg: |
       Insufficient vCPU quota for {{ _gpu_instance_type }} in {{ aws_region }}.
 
       Quota ({{ _quota_family }} On-Demand): {{ _vcpu_limit }} vCPUs
+      In use: {{ _vcpus_in_use }} vCPUs
+      Available: {{ _vcpus_available }} vCPUs
       Needed for {{ gpu_pool_max_replicas | default(4) }} × {{ _gpu_instance_type }}: {{ _vcpus_needed }} vCPUs ({{ _vcpus_per_node }} vCPUs each)
 
       Request an increase:
         aws service-quotas request-service-quota-increase \
           --service-code ec2 --quota-code {{ _quota_code }} \
-          --desired-value {{ _vcpus_needed }} \
+          --desired-value {{ (_vcpus_needed | int) + (_vcpus_in_use | int) }} \
           --region {{ aws_region }}
   when: _quota_code | trim | length > 0
 

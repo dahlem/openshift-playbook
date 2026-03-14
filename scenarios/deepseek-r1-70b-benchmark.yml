@@ -1,9 +1,10 @@
 ---
-# Benchmark scenario: DeepSeek-R1-Distill-Llama-70B FP8 on 4× L40S
+# Benchmark scenario: DeepSeek-R1-Distill-Llama-70B FP8 on 2× g6e.12xlarge
 #
 # BigCodeBench: ~15,000 completions with 16k context
-#   - 70B FP8 fits in ~35GB VRAM per GPU
-#   - 4× L40S (48GB each) → plenty of headroom for KV cache
+#   - 70B FP8 (~35GB) sharded across 2 GPUs via tensor parallelism
+#   - 2× g6e.12xlarge (4× L40S each) → 4 replicas, 2 GPUs per pod
+#   - ~$21/hr total
 #
 # Usage:
 #   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/deepseek-r1-70b-benchmark.yml
@@ -13,11 +14,13 @@ model_name: deepseek-r1-70b
 model_storage_uri: "hf://RedHatAI/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic"
 model_namespace: deepseek-r1-70b
 
-# Infrastructure — 4× L40S nodes
+# Infrastructure — 2× g6e.12xlarge (4 L40S GPUs each)
 gpu_pool_name: gpu-deepseek
-gpu_instance_type: g6e.2xlarge
-gpu_pool_min_replicas: 4
-gpu_pool_max_replicas: 4
+gpu_instance_type: g6e.12xlarge
+gpu_pool_min_replicas: 2
+gpu_pool_max_replicas: 2
+gpu_per_pod: 2
+vllm_tensor_parallel_size: 2
 
 # vLLM — optimized for batched throughput with 16k context
 vllm_max_model_len: 16384
@@ -26,5 +29,5 @@ vllm_extra_args:
   - --enable-chunked-prefill
   - --max-num-batched-tokens=4096
 
-# Knative — all pods always running, higher concurrency target
+# Knative — 4 replicas (2 per node), higher concurrency target
 knative_concurrency_target: "30"

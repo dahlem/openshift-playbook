@@ -63,8 +63,8 @@ ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
 | `mistral-24b-demo.yml` | Mistral-Small-24B (W4A16) | 1x L4 (always on) | Demos — no autoscaling |
 | `mistral-24b-large.yml` | Mistral-Small-24B (FP16) | 1-4x L40S | Full precision, 8k context |
 | `mistral-24b-benchmark.yml` | Mistral-Small-24B (W4A16) | 4x L40S | Bulk throughput, 32k context |
-| `llama-70b-benchmark.yml` | Llama-3.1-70B (FP8) | 4x L40S | Bulk throughput, 16k context |
-| `deepseek-r1-70b-benchmark.yml` | DeepSeek-R1-Distill-70B (FP8) | 4x L40S | Bulk throughput, 16k context |
+| `llama-70b-benchmark.yml` | Llama-3.1-70B (FP8) | 2× g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 16k context |
+| `deepseek-r1-70b-benchmark.yml` | DeepSeek-R1-Distill-70B (FP8) | 2× g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 16k context |
 | `mistral-24b-llmd-benchmark.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Disaggregated prefill/decode |
 
 Create your own:
@@ -97,7 +97,10 @@ ansible-playbook playbooks/gpu-scale.yml -e gpu_state=idle --ask-vault-pass
 # Scale GPUs back to active
 ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/mistral-24b-benchmark.yml --ask-vault-pass
 
-# Teardown workload (keeps cluster)
+# Teardown one scenario
+ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
+
+# Teardown all workloads (keeps cluster)
 ansible-playbook playbooks/llm-endpoint-teardown.yml --ask-vault-pass
 
 # Teardown everything including cluster
@@ -106,6 +109,23 @@ ansible-playbook playbooks/llm-endpoint-teardown.yml --ask-vault-pass -e teardow
 # Preflight check (validates everything, changes nothing)
 ansible-playbook playbooks/llm-endpoint-preflight.yml --ask-vault-pass
 ```
+
+### Multiple Models
+
+Deploy multiple scenarios on the same cluster by running them sequentially.
+Each scenario has its own GPU pool and namespace — no interference:
+
+```bash
+# Deploy two models side by side
+ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/deepseek-r1-70b-benchmark.yml --ask-vault-pass
+
+# Tear down one, keep the other
+ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
+```
+
+> **Important:** Always run scenarios sequentially, not in parallel.
+> Parallel runs can race on shared infrastructure and destabilize the cluster.
 
 ### Individual Steps
 

@@ -132,7 +132,8 @@
     name: "{{ model_name }}"
   register: _isvc
   until: >-
-    _isvc.resources | length > 0 and
+    not (_isvc.failed | default(false)) and
+    (_isvc.resources | default([]) | length > 0) and
     _isvc.resources[0].status is defined and
     _isvc.resources[0].status.conditions is defined and
     (_isvc.resources[0].status.conditions

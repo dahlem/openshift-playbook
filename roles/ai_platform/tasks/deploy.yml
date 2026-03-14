@@ -2,6 +2,8 @@
 - name: Create DSCInitialization
   kubernetes.core.k8s:
     state: present
+    server_side_apply:
+      field_manager: ansible
     definition:
       apiVersion: dscinitialization.opendatahub.io/v1
       kind: DSCInitialization
@@ -24,9 +26,39 @@
           customCABundle: ""
           managementState: Managed
 
+- name: Check for stuck Terminating pods in RHOAI operator
+  ansible.builtin.command:
+    cmd: >-
+      oc get pods -n redhat-ods-operator -l name=rhods-operator
+      --field-selector=status.phase=Running
+      -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{"\n"}{end}'
+  register: _stuck_pods
+  changed_when: false
+
+- name: Force-delete stuck Terminating pods
+  ansible.builtin.command:
+    cmd: "oc delete pod -n redhat-ods-operator {{ item }} --force --grace-period=0"
+  loop: "{{ _stuck_pods.stdout_lines | default([]) }}"
+  when: _stuck_pods.stdout_lines | default([]) | length > 0
+
+- name: Wait for RHOAI operator to be ready
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-operator
+    label_selectors:
+      - "name=rhods-operator"
+  register: _rhoai_operator
+  until: >-
+    _rhoai_operator.resources | default([]) | length > 0 and
+    (_rhoai_operator.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
 - name: Create DataScienceCluster
   kubernetes.core.k8s:
     state: present
+    server_side_apply:
+      field_manager: ansible
     definition:
       apiVersion: datasciencecluster.opendatahub.io/v1
       kind: DataScienceCluster
@@ -100,6 +132,15 @@
   until: _smm_crd.resources | length > 0
   retries: "{{ (crd_wait_timeout | int / 10) | int }}"
   delay: 10
+
+- name: Ensure model namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ model_namespace }}"
 
 - name: Join model namespace to service mesh
   kubernetes.core.k8s:
