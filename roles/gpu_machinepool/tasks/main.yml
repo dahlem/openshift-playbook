@@ -46,7 +46,7 @@
       retries: 20
       delay: 15
 
-    - name: Fail — no capacity in AZ
+    - name: Fail — provisioning error
       ansible.builtin.fail:
         msg: |
           GPU machine pool '{{ gpu_pool_name }}' ({{ _gpu_instance_type }}) failed to provision.
@@ -55,31 +55,30 @@
           Status: {{ _pool_status_msg | default('unknown') }}
           AZ: {{ _pool_az | default('unknown') }}, Replicas: {{ _pool_replicas | default('unknown') }}
 
-          This is most likely an AWS capacity issue — {{ _gpu_instance_type }} instances
-          are not currently available in {{ _pool_az | default(aws_region) }}.
+          Likely causes:
+            - AWS capacity: {{ _gpu_instance_type }} not available in {{ _pool_az | default(aws_region) }}
+            - Insufficient vCPU quota for {{ _gpu_instance_type }}
+            - IAM permissions missing for machine pool creation
+
+          Diagnose:
+            # Check AZ availability
+            aws ec2 describe-instance-type-offerings --location-type availability-zone \
+              --filters Name=instance-type,Values={{ _gpu_instance_type }} --region {{ aws_region }} \
+              --query 'InstanceTypeOfferings[*].Location' --output text
+
+            # Check vCPU quota
+            aws service-quotas get-service-quota --service-code ec2 \
+              --quota-code L-DB2E81BA --query 'Quota.Value' --region {{ aws_region }}
+
+            # Check running G-type instances consuming quota
+            aws ec2 describe-instances --filters 'Name=instance-state-name,Values=running' \
+              --query 'Reservations[].Instances[?starts_with(InstanceType,`g`)].{Type:InstanceType}' \
+              --output table --region {{ aws_region }}
 
           Options:
-            1. Re-run the playbook to retry (transient capacity issues may resolve)
-            2. Use a different instance type:
-               -e gpu_instance_type=g6.xlarge
-            3. Use a different AZ (requires a subnet in that AZ):
-               aws ec2 describe-instance-type-offerings --location-type availability-zone \
-                 --filters Name=instance-type,Values={{ _gpu_instance_type }} --region {{ aws_region }} \
-                 --query 'InstanceTypeOfferings[*].Location' --output text
-      when: (_pool_status_msg | default('')) is search('WaitingForAvailableMachines')
-
-    - name: Fail — general provisioning error
-      ansible.builtin.fail:
-        msg: |
-          GPU machine pool '{{ gpu_pool_name }}' ({{ _gpu_instance_type }}) failed to provision.
-          The broken pool has been cleaned up automatically.
-
-          Status: {{ _pool_status_msg | default('unknown') }}
-          AZ: {{ _pool_az | default('unknown') }}, Replicas: {{ _pool_replicas | default('unknown') }}
-
-          Check: ROSA console, IAM permissions, service quotas for {{ _gpu_instance_type }}.
-          Re-run this step to try again.
-      when: (_pool_status_msg | default('')) is not search('WaitingForAvailableMachines')
+            1. Re-run to retry (transient capacity issues may resolve)
+            2. Use a different instance type: -e gpu_instance_type=g6e.2xlarge
+            3. Use a different AZ (requires a subnet in that AZ)
 
 - name: "gpu_machinepool: check postconditions"
   ansible.builtin.include_tasks: postconditions.yml
