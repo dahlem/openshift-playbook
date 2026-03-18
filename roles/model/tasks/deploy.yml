@@ -149,8 +149,10 @@
     api_version: route.openshift.io/v1
     kind: Route
     namespace: istio-system
-    name: "{{ model_name }}-default"
+    label_selectors:
+      - "serving.kserve.io/inferenceservice={{ model_name }}"
   register: _route
-  until: _route.resources | length > 0
-  retries: 20
-  delay: 5
+  until: (_route.resources | default([]) | length) > 0
+  retries: 30
+  delay: 10
+  failed_when: false
