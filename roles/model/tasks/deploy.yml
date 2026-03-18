@@ -119,6 +119,7 @@
             modelFormat:
               name: vllm
             storageUri: "{{ model_oci_uri | default(model_storage_uri) }}"
+            args: "{{ _vllm_args if (model_use_builtin_runtime | default(false) | bool) else omit }}"
             resources:
               requests:
                 nvidia.com/gpu: "{{ gpu_per_pod | default(1) }}"
