@@ -53,26 +53,40 @@ GPU type, or scale — no code changes:
 
 ```bash
 ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
-  -e @scenarios/mistral-24b-benchmark.yml
+  -e @scenarios/llama-3-70b/benchmark.yml
 ```
 
 | Scenario | Model | GPUs | What it's for |
 |----------|-------|------|---------------|
 | *(default)* | Mistral-7B (W4A16) | 1x L4 | Development and light usage |
-| `mistral-24b.yml` | Mistral-Small-24B (W4A16) | 1x L4 | Higher quality, single GPU |
-| `mistral-24b-demo.yml` | Mistral-Small-24B (W4A16) | 1x L4 (always on) | Demos — no autoscaling |
-| `mistral-24b-large.yml` | Mistral-Small-24B (FP16) | 1-4x L40S | Full precision, 8k context |
-| `mistral-24b-benchmark.yml` | Mistral-Small-24B (W4A16) | 4x L40S | Bulk throughput, 32k context |
-| `llama-70b-benchmark.yml` | Llama-3.1-70B (FP8) | 2× g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 16k context |
-| `deepseek-r1-70b-benchmark.yml` | DeepSeek-R1-Distill-70B (FP8) | 2× g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 16k context |
-| `mistral-24b-llmd-benchmark.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Disaggregated prefill/decode |
+| `mistral-small-24b/dev.yml` | Mistral-Small-24B (W4A16) | 1x L4 | Higher quality, single GPU |
+| `mistral-small-24b/demo.yml` | Mistral-Small-24B (W4A16) | 1x L4 (always on) | Demos — no autoscaling |
+| `mistral-small-24b/large.yml` | Mistral-Small-24B (FP16) | 1-4x L40S | Full precision, 8k context |
+| `mistral-small-24b/benchmark.yml` | Mistral-Small-24B (W4A16) | 4x L40S | Bulk throughput, 32k context |
+| `llama-3-70b/benchmark.yml` | Llama-3.3-70B (FP8) | 2x g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 8k context |
+| `deepseek-r1-70b/benchmark.yml` | DeepSeek-R1-70B (FP8) | 2x g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 8k context |
+| `mistral-small-24b/benchmark-llmd.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Disaggregated prefill/decode |
+
+Scenarios use a two-file pattern: `model.yml` defines the model identity (name, URI,
+quantization, validated GPUs), and use-case files like `dev.yml` or `benchmark.yml` define
+scaling and infrastructure. The use-case file points to its model via `_scenario_dir`, which
+auto-loads `model.yml` at runtime.
 
 Create your own:
 
 ```yaml
-# scenarios/my-scenario.yml
+# scenarios/my-model/model.yml — model identity
 model_name: my-model
 model_storage_uri: "hf://org/model-name"
+model_quantization: w4a16
+model_params_billions: 7
+model_validated_gpus:
+  g6.xlarge: { max_context: 8192 }
+```
+
+```yaml
+# scenarios/my-model/benchmark.yml — use-case config
+_scenario_dir: "{{ playbook_dir }}/../scenarios/my-model"
 gpu_instance_type: g6e.2xlarge
 gpu_pool_min_replicas: 2
 gpu_pool_max_replicas: 8
@@ -95,10 +109,10 @@ ansible-playbook playbooks/llm-endpoint-llmd.yml --ask-vault-pass
 ansible-playbook playbooks/gpu-scale.yml -e gpu_state=idle --ask-vault-pass
 
 # Scale GPUs back to active
-ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/mistral-24b-benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/gpu-scale.yml -e gpu_state=active -e @scenarios/mistral-small-24b/benchmark.yml --ask-vault-pass
 
 # Teardown one scenario
-ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-3-70b/benchmark.yml --ask-vault-pass
 
 # Teardown all workloads (keeps cluster)
 ansible-playbook playbooks/llm-endpoint-teardown.yml --ask-vault-pass
@@ -117,11 +131,11 @@ Each scenario has its own GPU pool and namespace — no interference:
 
 ```bash
 # Deploy two models side by side
-ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
-ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/deepseek-r1-70b-benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/llama-3-70b/benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/deepseek-r1-70b/benchmark.yml --ask-vault-pass
 
 # Tear down one, keep the other
-ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-70b-benchmark.yml --ask-vault-pass
+ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-3-70b/benchmark.yml --ask-vault-pass
 ```
 
 > **Important:** Always run scenarios sequentially, not in parallel.
@@ -234,7 +248,7 @@ Three overlay directories customize deployments without changing code:
 
 | Directory | What it overrides | Example |
 |-----------|-------------------|---------|
-| `scenarios/` | Model, GPU type, replica count, vLLM tuning | `-e @scenarios/mistral-24b-benchmark.yml` |
+| `scenarios/` | Model, GPU type, replica count, vLLM tuning | `-e @scenarios/mistral-small-24b/benchmark.yml` |
 | `clusters/` | Cluster name, subnets, IAM, region | `-e @clusters/staging.yml` |
 | `profiles/` | OCM access grants (users + roles) | `-e @profiles/my-team.yml` |
 
@@ -243,7 +257,7 @@ Overlays compose:
 ```bash
 ansible-playbook playbooks/llm-endpoint-on-cluster.yml \
   -e @clusters/staging.yml \
-  -e @scenarios/mistral-24b-benchmark.yml \
+  -e @scenarios/mistral-small-24b/benchmark.yml \
   -e @profiles/my-team.yml \
   --ask-vault-pass
 ```
@@ -288,7 +302,7 @@ The mapping lives in `versions.yml`.
 | `inventory/group_vars/all/config.yml` | yes | Public defaults — timeouts, GPU pool, model serving |
 | `inventory/group_vars/all/site.yml` | **no** | Site-specific — cluster name, subnets, IAM ARNs |
 | `inventory/group_vars/all/vault.yml` | **no** | Encrypted secrets — OCM token, registry credentials |
-| `scenarios/*.yml` | yes | Model/GPU/tuning overrides |
+| `scenarios/<model>/*.yml` | yes | Model/GPU/tuning overrides |
 | `clusters/*.yml` | **no** | Cluster-specific overrides |
 | `profiles/*.yml` | **no** | Access grant profiles |
 

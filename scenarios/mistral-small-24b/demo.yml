@@ -1,0 +1,10 @@
+---
+# Demo: single pre-warmed GPU node, no autoscaling
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/mistral-small-24b/demo.yml --ask-vault-pass
+_scenario_dir: "{{ playbook_dir }}/../scenarios/mistral-small-24b"
+
+gpu_instance_type: g6.xlarge
+gpu_pool_min_replicas: 1
+gpu_pool_max_replicas: 1

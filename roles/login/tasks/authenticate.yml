@@ -43,11 +43,18 @@
   no_log: true
 
 # 4. oc login — only if cluster exists and we're not already logged in to the right cluster
-- name: Check oc login
+- name: Check oc session is valid
+  ansible.builtin.command: oc whoami
+  register: _oc_auth_check
+  changed_when: false
+  failed_when: false
+
+- name: Check oc target server
   ansible.builtin.command: oc whoami --show-server
   register: _oc_server_check
   changed_when: false
   failed_when: false
+  when: _oc_auth_check.rc == 0
 
 - name: Get expected API URL from ROSA
   ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
@@ -58,12 +65,7 @@
 - name: Determine if oc is logged in to correct cluster
   ansible.builtin.set_fact:
     _oc_check:
-      rc: >-
-        {{ 0 if (
-          _oc_server_check.rc == 0 and
-          _rosa_api_check.rc == 0 and
-          (_rosa_api_check.stdout | from_json).api.url | default('') in (_oc_server_check.stdout | default(''))
-        ) else 1 }}
+      rc: "{{ 0 if (_oc_auth_check.rc == 0 and _rosa_api_check.rc == 0 and (_rosa_api_check.stdout | from_json).api.url | default('') in (_oc_server_check.stdout | default(''))) else 1 }}"
 
 - name: Try stored credentials
   when:

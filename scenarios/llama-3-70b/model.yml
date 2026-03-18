@@ -1,0 +1,11 @@
+---
+# Llama-3.3-70B-Instruct — FP8 dynamic quantization, OCI modelcar
+model_name: llama-3-70b
+model_storage_uri: "hf://RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic"
+model_oci_uri: "oci://registry.redhat.io/rhelai1/modelcar-llama-3-3-70b-instruct-fp8-dynamic:1.5"
+model_quantization: fp8_dynamic
+model_params_billions: 70
+model_validated_gpus:
+  g6e.2xlarge: { max_context: 4096 }
+  g6e.12xlarge: { max_context: 16384, tp: 2 }
+  p5.48xlarge: { max_context: 32768 }

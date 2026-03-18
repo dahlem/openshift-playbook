@@ -4,11 +4,8 @@
 # Target: ~15,000 completions in ~2 hours with reduced decode latency.
 #
 # Usage:
-#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/mistral-24b-llmd-benchmark.yml
-
-# Model
-model_name: mistral-small-24b
-model_storage_uri: "hf://RedHatAI/Mistral-Small-24B-Instruct-2501-quantized.w4a16"
+#   ansible-playbook playbooks/llm-endpoint-llmd.yml -e @scenarios/mistral-small-24b/benchmark-llmd.yml
+_scenario_dir: "{{ playbook_dir }}/../scenarios/mistral-small-24b"
 
 # Prefill pool — fewer nodes, compute-bound work
 prefill_pool_name: gpu-prefill

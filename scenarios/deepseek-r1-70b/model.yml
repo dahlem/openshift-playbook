@@ -1,0 +1,10 @@
+---
+# DeepSeek-R1-Distill-Llama-70B — FP8 dynamic quantization
+model_name: deepseek-r1-70b
+model_storage_uri: "hf://RedHatAI/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic"
+model_quantization: fp8_dynamic
+model_params_billions: 70
+model_validated_gpus:
+  g6e.2xlarge: { max_context: 4096 }
+  g6e.12xlarge: { max_context: 16384, tp: 2 }
+  p5.48xlarge: { max_context: 32768 }

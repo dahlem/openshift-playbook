@@ -1,0 +1,22 @@
+---
+# Benchmark: high-throughput for bulk inference (e.g. BigCodeBench)
+#
+# Target: ~15,000 completions in ~2 hours
+#   - 4x L40S at ~200 tok/s batched each
+#   - With chunked prefill and high concurrency -> ~1,200-1,600 tok/s
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/mistral-small-24b/benchmark.yml --ask-vault-pass
+_scenario_dir: "{{ playbook_dir }}/../scenarios/mistral-small-24b"
+
+gpu_instance_type: g6e.2xlarge
+gpu_pool_min_replicas: 4
+gpu_pool_max_replicas: 4
+
+vllm_max_model_len: 32768
+vllm_gpu_memory_utilization: "0.95"
+vllm_extra_args:
+  - --enable-chunked-prefill
+  - --max-num-batched-tokens=4096
+
+knative_concurrency_target: "30"

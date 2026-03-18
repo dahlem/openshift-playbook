@@ -1,0 +1,17 @@
+---
+# Full precision Mistral-Small-24B on L40S
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/mistral-small-24b/large.yml --ask-vault-pass
+_scenario_dir: "{{ playbook_dir }}/../scenarios/mistral-small-24b"
+
+# Override model URI to full precision
+model_storage_uri: "hf://mistralai/Mistral-Small-24B-Instruct-2501"
+model_quantization: fp16
+
+gpu_instance_type: g6e.2xlarge
+gpu_pool_min_replicas: 1
+gpu_pool_max_replicas: 4
+
+vllm_max_model_len: 8192
+vllm_gpu_memory_utilization: "0.9"

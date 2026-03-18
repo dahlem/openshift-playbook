@@ -1,0 +1,11 @@
+---
+# Mistral-7B-Instruct-v0.3 — lightweight default for development
+model_name: mistral-7b
+model_storage_uri: "hf://RedHatAI/Mistral-7B-Instruct-v0.3-quantized.w4a16"
+model_oci_uri: "quay.io/redhat-ai-services/modelcar-catalog:mistral-7b-instruct-v0.3"
+model_quantization: w4a16
+model_params_billions: 7
+model_validated_gpus:
+  g6.xlarge:   { max_context: 8192 }
+  g6e.xlarge:  { max_context: 32768 }
+  g6e.2xlarge: { max_context: 32768 }

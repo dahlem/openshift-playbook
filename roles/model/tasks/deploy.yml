@@ -26,6 +26,7 @@
       }}
 
 - name: Create vLLM ServingRuntime
+  when: not (model_use_builtin_runtime | default(false) | bool)
   kubernetes.core.k8s:
     state: present
     definition:
@@ -114,10 +115,10 @@
           nodeSelector:
             node.kubernetes.io/instance-type: "{{ _gpu_instance_type }}"
           model:
-            runtime: vllm-runtime
+            runtime: "{{ 'vllm-cuda-runtime' if (model_use_builtin_runtime | default(false) | bool) else 'vllm-runtime' }}"
             modelFormat:
               name: vllm
-            storageUri: "{{ model_storage_uri }}"
+            storageUri: "{{ model_oci_uri | default(model_storage_uri) }}"
             resources:
               requests:
                 nvidia.com/gpu: "{{ gpu_per_pod | default(1) }}"

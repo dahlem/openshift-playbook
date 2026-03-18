@@ -7,6 +7,11 @@
     name: versions
   when: versions is not defined
 
+- name: Auto-load model.yml from scenario folder
+  ansible.builtin.include_vars:
+    file: "{{ _scenario_dir }}/model.yml"
+  when: _scenario_dir is defined
+
 - name: Resolve GPU instance type
   ansible.builtin.set_fact:
     _gpu_instance_type: "{{ gpu_instance_type | default(versions.infrastructure.gpu_instance_type) }}"
@@ -102,6 +107,40 @@
       _gpu_nodes.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0
     fail_msg: "GPU node of type {{ _gpu_instance_type }} exists but is not Ready."
   when: _expect_nodes | bool
+
+# GPU/Quantization compatibility validation
+- name: Load GPU capabilities
+  ansible.builtin.set_fact:
+    _gpu_caps: "{{ versions.gpu_capabilities[_gpu_instance_type] | default({}) }}"
+  when: versions.gpu_capabilities is defined
+
+- name: Validate FP8 quantization requires FP8-capable GPU
+  ansible.builtin.fail:
+    msg: |
+      Model {{ model_name }} uses {{ model_quantization }} quantization but
+      {{ _gpu_instance_type }} ({{ _gpu_caps.gpu | default('unknown') }}) does not
+      have FP8 tensor cores.
+
+      Options:
+        - Use g6e.xlarge or larger (L40S) for FP8 inference
+        - Use a W4A16 or W8A8 quantized variant of the model
+  when:
+    - model_quantization is defined
+    - model_quantization in ['fp8', 'fp8_dynamic']
+    - _gpu_caps | default({}) | length > 0
+    - not (_gpu_caps.fp8_compute | default(false) | bool)
+
+- name: Warn if context length exceeds validated maximum
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Requested context length {{ vllm_max_model_len }} exceeds the
+      validated maximum ({{ model_validated_gpus[_gpu_instance_type].max_context }})
+      for {{ model_name }} on {{ _gpu_instance_type }}.
+      The model may run out of GPU memory.
+  when:
+    - model_validated_gpus is defined
+    - _gpu_instance_type in (model_validated_gpus | default({}))
+    - (vllm_max_model_len | default(4096) | int) > (model_validated_gpus[_gpu_instance_type].max_context | default(99999) | int)
 
 - name: "model: GPU pool autoscales from 0 — node will provision when model is deployed"
   ansible.builtin.debug:

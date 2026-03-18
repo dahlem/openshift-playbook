@@ -1,0 +1,30 @@
+---
+# Benchmark: Llama-3.3-70B FP8 on 2x g6e.12xlarge
+#
+# BigCodeBench: ~15,000 completions with 8k context
+#   - 70B FP8 (~35GB) sharded across 2 GPUs via tensor parallelism
+#   - 2x g6e.12xlarge (4x L40S each) -> 4 replicas, 2 GPUs per pod
+#   - ~$21/hr total
+#
+# Usage:
+#   ansible-playbook playbooks/llm-endpoint.yml -e @scenarios/llama-3-70b/benchmark.yml --ask-vault-pass
+_scenario_dir: "{{ playbook_dir }}/../scenarios/llama-3-70b"
+
+model_namespace: llama-3-70b
+model_use_builtin_runtime: true
+
+gpu_pool_name: gpu-llama
+gpu_instance_type: g6e.12xlarge
+gpu_pool_min_replicas: 2
+gpu_pool_max_replicas: 2
+gpu_per_pod: 2
+vllm_tensor_parallel_size: 2
+
+vllm_max_model_len: 8192
+vllm_gpu_memory_utilization: "0.90"
+vllm_extra_args:
+  - --enable-chunked-prefill
+  - --max-num-batched-tokens=4096
+  - --enforce-eager
+
+knative_concurrency_target: "30"

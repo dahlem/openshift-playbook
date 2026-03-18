@@ -17,6 +17,7 @@ gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"
 model_name: mistral-7b
 model_storage_uri: "hf://RedHatAI/Mistral-7B-Instruct-v0.3-quantized.w4a16"
 model_namespace: default
+model_use_builtin_runtime: false
 
 # vLLM Runtime Tuning
 vllm_tensor_parallel_size: 1
