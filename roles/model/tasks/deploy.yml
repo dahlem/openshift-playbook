@@ -25,8 +25,14 @@
         + (vllm_extra_args | default([]))
       }}
 
+- name: Resolve vLLM image
+  ansible.builtin.set_fact:
+    _vllm_image: >-
+      {{ versions.runtime.vllm_validated_image
+         if (model_use_builtin_runtime | default(false) | bool)
+         else versions.runtime.vllm_image }}
+
 - name: Create vLLM ServingRuntime
-  when: not (model_use_builtin_runtime | default(false) | bool)
   kubernetes.core.k8s:
     state: present
     definition:
@@ -43,9 +49,14 @@
         supportedModelFormats:
           - name: vllm
             autoSelect: true
+        volumes:
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "{{ vllm_shm_size | default('12Gi') }}"
         containers:
           - name: kserve-container
-            image: "{{ versions.runtime.vllm_image }}"
+            image: "{{ _vllm_image }}"
             command: ["python", "-m", "vllm.entrypoints.openai.api_server"]
             args: "{{ _vllm_args }}"
             ports:
@@ -54,6 +65,9 @@
             env:
               - name: HF_HUB_CACHE
                 value: /tmp/hf-cache
+            volumeMounts:
+              - name: shm
+                mountPath: /dev/shm
             startupProbe:
               httpGet:
                 path: /health
@@ -115,11 +129,10 @@
           nodeSelector:
             node.kubernetes.io/instance-type: "{{ _gpu_instance_type }}"
           model:
-            runtime: "{{ 'vllm-cuda-runtime' if (model_use_builtin_runtime | default(false) | bool) else 'vllm-runtime' }}"
+            runtime: vllm-runtime
             modelFormat:
               name: vllm
             storageUri: "{{ model_oci_uri | default(model_storage_uri) }}"
-            args: "{{ _vllm_args if (model_use_builtin_runtime | default(false) | bool) else omit }}"
             resources:
               requests:
                 nvidia.com/gpu: "{{ gpu_per_pod | default(1) }}"

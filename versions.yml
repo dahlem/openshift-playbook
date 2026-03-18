@@ -41,6 +41,7 @@ infrastructure:
 
 runtime:
   vllm_image: registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
+  vllm_validated_image: registry.redhat.io/rhoai/odh-vllm-cuda-rhel9@sha256:46cffdeb70009f8f901e0dc658c8c499a5d2b4bbcea343741d7d7fda2a12b9b2
 
 # OCM API schema — pin API versions, response schemas, and field paths.
 # Bump api.*.version when migrating to a new OCM API version.

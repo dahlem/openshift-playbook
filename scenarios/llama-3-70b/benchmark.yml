@@ -20,7 +20,7 @@ gpu_pool_max_replicas: 2
 gpu_per_pod: 2
 vllm_tensor_parallel_size: 2
 
-vllm_max_model_len: 8192
+vllm_max_model_len: 32768
 vllm_gpu_memory_utilization: "0.90"
 vllm_extra_args:
   - --enable-chunked-prefill
