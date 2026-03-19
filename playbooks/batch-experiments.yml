@@ -1,0 +1,18 @@
+---
+# Full batch experiment infrastructure
+#
+# Usage:
+#   ansible-playbook playbooks/batch-experiments.yml
+#
+# Override defaults:
+#   ansible-playbook playbooks/batch-experiments.yml \
+#     --extra-vars '@scenarios/my-scenario.yml'
+
+- name: Batch experiment infrastructure
+  hosts: localhost
+  roles:
+    - role: login
+    - role: batch_experiment_namespace
+    - role: batch_experiment_storage
+    - role: batch_model_cache
+    - role: batch_workflow_engine

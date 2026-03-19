@@ -1,0 +1,25 @@
+---
+# Post: all cache Jobs completed successfully
+
+- name: Check all cache Jobs
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    name: "cache-{{ item | regex_replace('[^a-z0-9]', '-') }}"
+    namespace: "{{ batch_namespace }}"
+  register: _post_cache_jobs
+  loop: "{{ batch_model_cache_models }}"
+
+- name: Assert all cache Jobs succeeded
+  ansible.builtin.assert:
+    that:
+      - item.resources | length > 0
+      - (item.resources[0].status.succeeded | default(0) | int) >= 1
+    fail_msg: "Cache Job for {{ item.item }} did not complete successfully."
+  loop: "{{ _post_cache_jobs.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: "batch_model_cache postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "All {{ batch_model_cache_models | length }} model cache Jobs completed successfully."

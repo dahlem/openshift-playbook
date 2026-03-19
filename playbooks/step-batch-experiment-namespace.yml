@@ -1,0 +1,11 @@
+---
+# Step: Create batch experiment namespace with quotas and RBAC
+#
+# Usage:
+#   ansible-playbook playbooks/step-batch-experiment-namespace.yml
+
+- name: Create batch experiment namespace
+  hosts: localhost
+  roles:
+    - role: login
+    - role: batch_experiment_namespace

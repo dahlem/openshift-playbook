@@ -1,0 +1,18 @@
+---
+# Post: Workflow CRD exists
+
+- name: Verify Workflow CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: workflows.argoproj.io
+  register: _post_workflow_crd
+
+- name: Assert Workflow CRD exists
+  ansible.builtin.assert:
+    that: _post_workflow_crd.resources | length > 0
+    fail_msg: "Workflow CRD workflows.argoproj.io not found. Argo Workflows operator may have failed."
+
+- name: "batch_workflow_engine postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Argo Workflows operator installed, Workflow CRD available."

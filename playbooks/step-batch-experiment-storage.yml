@@ -1,0 +1,11 @@
+---
+# Step: Provision batch experiment storage (PVCs)
+#
+# Usage:
+#   ansible-playbook playbooks/step-batch-experiment-storage.yml
+
+- name: Provision batch experiment storage
+  hosts: localhost
+  roles:
+    - role: login
+    - role: batch_experiment_storage

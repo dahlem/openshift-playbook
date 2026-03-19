@@ -1,0 +1,47 @@
+---
+# Post: namespace, ServiceAccount, ResourceQuota exist
+
+- name: Verify namespace exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ batch_namespace }}"
+  register: _post_namespace
+
+- name: Assert namespace exists
+  ansible.builtin.assert:
+    that: _post_namespace.resources | length > 0
+    fail_msg: "Namespace {{ batch_namespace }} not found."
+
+- name: Verify ServiceAccount exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ServiceAccount
+    name: "{{ batch_service_account }}"
+    namespace: "{{ batch_namespace }}"
+  register: _post_sa
+
+- name: Assert ServiceAccount exists
+  ansible.builtin.assert:
+    that: _post_sa.resources | length > 0
+    fail_msg: "ServiceAccount {{ batch_service_account }} not found in {{ batch_namespace }}."
+
+- name: Verify ResourceQuota exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ResourceQuota
+    name: batch-gpu-quota
+    namespace: "{{ batch_namespace }}"
+  register: _post_quota
+
+- name: Assert ResourceQuota exists
+  ansible.builtin.assert:
+    that: _post_quota.resources | length > 0
+    fail_msg: "ResourceQuota batch-gpu-quota not found in {{ batch_namespace }}."
+
+- name: "batch_experiment_namespace postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      Namespace {{ batch_namespace }} provisioned with ServiceAccount
+      {{ batch_service_account }} and ResourceQuota (GPU={{ batch_gpu_quota }},
+      CPU={{ batch_cpu_quota }}, memory={{ batch_memory_quota }}).

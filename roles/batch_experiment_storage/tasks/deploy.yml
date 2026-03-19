@@ -1,0 +1,35 @@
+---
+- name: Create results PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: "{{ batch_results_pvc_name }}"
+        namespace: "{{ batch_namespace }}"
+      spec:
+        accessModes:
+          - "{{ batch_results_access_mode }}"
+        storageClassName: "{{ batch_results_storage_class }}"
+        resources:
+          requests:
+            storage: "{{ batch_results_pvc_size }}"
+
+- name: Create model-cache PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: "{{ batch_model_cache_pvc_name }}"
+        namespace: "{{ batch_namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: "{{ batch_results_storage_class }}"
+        resources:
+          requests:
+            storage: "{{ batch_model_cache_pvc_size }}"
+  when: batch_model_cache_enabled | bool

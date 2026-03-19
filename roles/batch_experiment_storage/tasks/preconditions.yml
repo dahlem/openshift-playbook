@@ -1,0 +1,38 @@
+---
+# Pre: namespace exists
+
+- name: Check if results PVC exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ batch_results_pvc_name }}"
+    namespace: "{{ batch_namespace }}"
+  register: _pre_results_pvc
+
+- name: Check if model-cache PVC exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ batch_model_cache_pvc_name }}"
+    namespace: "{{ batch_namespace }}"
+  register: _pre_cache_pvc
+  when: batch_model_cache_enabled | bool
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_results_pvc.resources | length > 0 and
+        (not (batch_model_cache_enabled | bool) or
+         (_pre_cache_pvc.resources | default([]) | length > 0))
+      ) }}
+
+- name: "batch_experiment_storage: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "batch_experiment_storage: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "batch_experiment_storage preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Storage PVCs need provisioning in {{ batch_namespace }}."
+  when: _deploy_needed | bool

@@ -1,0 +1,52 @@
+---
+# Post: PVCs exist and are Bound
+
+- name: Verify results PVC exists and is Bound
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ batch_results_pvc_name }}"
+    namespace: "{{ batch_namespace }}"
+  register: _post_results_pvc
+  until: >-
+    _post_results_pvc.resources | length > 0 and
+    (_post_results_pvc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 10
+
+- name: Assert results PVC is Bound
+  ansible.builtin.assert:
+    that:
+      - _post_results_pvc.resources | length > 0
+      - _post_results_pvc.resources[0].status.phase == 'Bound'
+    fail_msg: "PVC {{ batch_results_pvc_name }} not found or not Bound in {{ batch_namespace }}."
+
+- name: Verify model-cache PVC exists and is Bound
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ batch_model_cache_pvc_name }}"
+    namespace: "{{ batch_namespace }}"
+  register: _post_cache_pvc
+  until: >-
+    _post_cache_pvc.resources | length > 0 and
+    (_post_cache_pvc.resources[0].status.phase | default('')) == 'Bound'
+  retries: 30
+  delay: 10
+  when: batch_model_cache_enabled | bool
+
+- name: Assert model-cache PVC is Bound
+  ansible.builtin.assert:
+    that:
+      - _post_cache_pvc.resources | length > 0
+      - _post_cache_pvc.resources[0].status.phase == 'Bound'
+    fail_msg: "PVC {{ batch_model_cache_pvc_name }} not found or not Bound in {{ batch_namespace }}."
+  when: batch_model_cache_enabled | bool
+
+- name: "batch_experiment_storage postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      Storage provisioned: {{ batch_results_pvc_name }} ({{ batch_results_pvc_size }})
+      {{ '+ ' ~ batch_model_cache_pvc_name ~ ' (' ~ batch_model_cache_pvc_size ~ ')'
+         if (batch_model_cache_enabled | bool) else '' }}
+      in {{ batch_namespace }}.

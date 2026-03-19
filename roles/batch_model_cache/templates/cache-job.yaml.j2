@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "cache-{{ model_name_sanitized }}"
+  namespace: "{{ batch_namespace }}"
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: download
+          image: python:3.12-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              pip install -q huggingface-hub &&
+              huggingface-cli download {{ model_name }}
+          volumeMounts:
+            - name: cache
+              mountPath: /root/.cache/huggingface
+{% if batch_model_cache_token_secret %}
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ batch_model_cache_token_secret }}"
+                  key: token
+{% endif %}
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: "{{ batch_model_cache_pvc_name }}"

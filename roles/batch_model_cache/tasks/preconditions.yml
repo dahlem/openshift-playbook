@@ -1,0 +1,52 @@
+---
+# Pre: namespace and model-cache PVC exist
+
+- name: Check if model-cache PVC exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: "{{ batch_model_cache_pvc_name }}"
+    namespace: "{{ batch_namespace }}"
+  register: _pre_cache_pvc
+
+- name: Assert model-cache PVC exists
+  ansible.builtin.assert:
+    that: _pre_cache_pvc.resources | length > 0
+    fail_msg: >-
+      PVC {{ batch_model_cache_pvc_name }} not found in {{ batch_namespace }}.
+      Run batch_experiment_storage first.
+
+- name: Check for completed cache Jobs
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    name: "cache-{{ item | regex_replace('[^a-z0-9]', '-') }}"
+    namespace: "{{ batch_namespace }}"
+  register: _pre_cache_jobs
+  loop: "{{ batch_model_cache_models }}"
+
+- name: Identify uncached models
+  ansible.builtin.set_fact:
+    _models_to_cache: >-
+      {% set cached = [] %}
+      {% for result in _pre_cache_jobs.results %}
+      {%   if result.resources | length > 0 and
+              (result.resources[0].status.succeeded | default(0) | int) >= 1 %}
+      {%     set _ = cached.append(result.item) %}
+      {%   endif %}
+      {% endfor %}
+      {{ batch_model_cache_models | difference(cached) }}
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: "{{ _models_to_cache | length > 0 }}"
+
+- name: "batch_model_cache: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "batch_model_cache: all {{ batch_model_cache_models | length }} models already cached."
+  when: not (_deploy_needed | bool)
+
+- name: "batch_model_cache preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "{{ _models_to_cache | length }} model(s) to cache: {{ _models_to_cache | join(', ') }}"
+  when: _deploy_needed | bool

@@ -1,0 +1,9 @@
+---
+batch_namespace: batch-experiments
+batch_results_pvc_name: batch-results
+batch_results_pvc_size: 50Gi
+batch_results_access_mode: ReadWriteMany
+batch_results_storage_class: gp3-csi
+batch_model_cache_enabled: true
+batch_model_cache_pvc_name: model-cache
+batch_model_cache_pvc_size: 100Gi

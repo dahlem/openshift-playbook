@@ -1,0 +1,10 @@
+---
+- name: "batch_workflow_engine: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "batch_workflow_engine: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "batch_workflow_engine: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

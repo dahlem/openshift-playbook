@@ -1,0 +1,52 @@
+---
+- name: Create namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ batch_namespace }}"
+
+- name: Create ResourceQuota
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: batch-gpu-quota
+        namespace: "{{ batch_namespace }}"
+      spec:
+        hard:
+          nvidia.com/gpu: "{{ batch_gpu_quota }}"
+          cpu: "{{ batch_cpu_quota }}"
+          memory: "{{ batch_memory_quota }}"
+
+- name: Create ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: "{{ batch_service_account }}"
+        namespace: "{{ batch_namespace }}"
+
+- name: Create RoleBinding for ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ batch_service_account }}-edit"
+        namespace: "{{ batch_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: edit
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ batch_service_account }}"
+          namespace: "{{ batch_namespace }}"

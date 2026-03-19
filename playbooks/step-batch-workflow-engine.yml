@@ -1,0 +1,11 @@
+---
+# Step: Install Argo Workflows operator
+#
+# Usage:
+#   ansible-playbook playbooks/step-batch-workflow-engine.yml
+
+- name: Install Argo Workflows operator
+  hosts: localhost
+  roles:
+    - role: login
+    - role: batch_workflow_engine

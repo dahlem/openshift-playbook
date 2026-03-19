@@ -1,0 +1,28 @@
+---
+- name: Create cache Job for each model
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'cache-job.yaml.j2') }}"
+  vars:
+    model_name: "{{ item }}"
+    model_name_sanitized: "{{ item | regex_replace('[^a-z0-9]', '-') }}"
+  loop: "{{ _models_to_cache }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Wait for cache Jobs to complete
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    name: "cache-{{ item | regex_replace('[^a-z0-9]', '-') }}"
+    namespace: "{{ batch_namespace }}"
+  register: _cache_job_status
+  until: >-
+    _cache_job_status.resources | length > 0 and
+    ((_cache_job_status.resources[0].status.succeeded | default(0) | int) >= 1 or
+     (_cache_job_status.resources[0].status.failed | default(0) | int) > 2)
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+  loop: "{{ _models_to_cache }}"
+  loop_control:
+    label: "{{ item }}"

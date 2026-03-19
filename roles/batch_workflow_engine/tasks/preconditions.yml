@@ -1,0 +1,35 @@
+---
+# Pre: cluster accessible, OLM available
+
+- name: Check if Workflow CRD exists
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: workflows.argoproj.io
+  register: _pre_workflow_crd
+
+- name: Check if Argo Workflows Subscription exists
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: argo-workflows-operator
+    namespace: openshift-operators
+  register: _pre_argo_sub
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_workflow_crd.resources | length > 0 and
+        _pre_argo_sub.resources | length > 0
+      ) }}
+
+- name: "batch_workflow_engine: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "batch_workflow_engine: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "batch_workflow_engine preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Argo Workflows operator needs installation."
+  when: _deploy_needed | bool

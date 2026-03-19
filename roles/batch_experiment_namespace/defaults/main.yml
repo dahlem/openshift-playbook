@@ -1,0 +1,6 @@
+---
+batch_namespace: batch-experiments
+batch_gpu_quota: 8
+batch_cpu_quota: 32
+batch_memory_quota: 64Gi
+batch_service_account: batch-runner

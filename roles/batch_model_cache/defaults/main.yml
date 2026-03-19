@@ -1,0 +1,6 @@
+---
+batch_namespace: batch-experiments
+batch_model_cache_pvc_name: model-cache
+batch_model_cache_models: []
+batch_model_cache_provider: huggingface
+batch_model_cache_token_secret: ""

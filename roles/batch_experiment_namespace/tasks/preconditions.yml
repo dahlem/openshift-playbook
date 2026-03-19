@@ -1,0 +1,46 @@
+---
+# Pre: cluster accessible, oc logged in
+
+- name: Check if namespace exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ batch_namespace }}"
+  register: _pre_namespace
+
+- name: Check if ServiceAccount exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ServiceAccount
+    name: "{{ batch_service_account }}"
+    namespace: "{{ batch_namespace }}"
+  register: _pre_sa
+  when: _pre_namespace.resources | length > 0
+
+- name: Check if ResourceQuota exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ResourceQuota
+    name: batch-gpu-quota
+    namespace: "{{ batch_namespace }}"
+  register: _pre_quota
+  when: _pre_namespace.resources | length > 0
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_namespace.resources | length > 0 and
+        (_pre_sa.resources | default([]) | length > 0) and
+        (_pre_quota.resources | default([]) | length > 0)
+      ) }}
+
+- name: "batch_experiment_namespace: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: "batch_experiment_namespace: already complete, skipping deploy."
+  when: not (_deploy_needed | bool)
+
+- name: "batch_experiment_namespace preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "Namespace {{ batch_namespace }} needs provisioning."
+  when: _deploy_needed | bool

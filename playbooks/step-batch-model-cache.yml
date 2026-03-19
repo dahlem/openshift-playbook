@@ -1,0 +1,11 @@
+---
+# Step: Download models into shared cache PVC
+#
+# Usage:
+#   ansible-playbook playbooks/step-batch-model-cache.yml
+
+- name: Download models into shared cache
+  hosts: localhost
+  roles:
+    - role: login
+    - role: batch_model_cache
