@@ -66,6 +66,8 @@ ansible-playbook playbooks/llm-endpoint.yml --ask-vault-pass \
 | `llama-3-70b/benchmark.yml` | Llama-3.3-70B (FP8) | 2x g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 8k context |
 | `deepseek-r1-70b/benchmark.yml` | DeepSeek-R1-70B (FP8) | 2x g6e.12xlarge (8 L40S) | TP=2, 4 replicas, 8k context |
 | `mistral-small-24b/benchmark-llmd.yml` | Mistral-Small-24B (W4A16) | 2+4 L40S | Disaggregated prefill/decode |
+| `serveguard/cpu.yml` | SmolLM2-135M + admitted LoRA | none (1x m6i.2xlarge) | [ServeGuard demo](#serveguard-demo-openshift-ai) — `playbooks/serveguard-demo.yml` |
+| `serveguard/gpu.yml` | SmolLM2-135M + admitted LoRA | 1x L4 (g6.2xlarge) | ServeGuard demo, GPU serving |
 
 Scenarios use a two-file pattern: `model.yml` defines the model identity (name, URI,
 quantization, validated GPUs), and use-case files like `dev.yml` or `benchmark.yml` define
@@ -140,6 +142,26 @@ ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-3-70b/b
 
 > **Important:** Always run scenarios sequentially, not in parallel.
 > Parallel runs can race on shared infrastructure and destabilize the cluster.
+
+### ServeGuard demo (OpenShift AI)
+
+The [ServeGuard](https://arxiv.org/abs/2609.21515) OpenShift AI demo uses its own
+playbooks. They install RHOAI 3.x with **only KServe in standard (RawDeployment)
+mode**, plus cert-manager, its only dependency. There is no Serverless or Service
+Mesh. The playbooks then run the serveguard repository's `make demo-up` and
+`make demo-stories`, and print each story's verdict:
+
+```bash
+# serveguard checked out next to this repo (../serveguard)
+ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass   # or gpu.yml
+ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass  # -e teardown_cluster=true
+# RHOAI 3.6 once GA: add -e rhoai_channel=stable-3.6 after the scenario file
+```
+
+Budget about $2.60/h (CPU) or $3.20/h (GPU), and 75 to 110 minutes from an empty
+account. Prerequisites, the exact sequence, the expected output and the 3.6
+switch are in [docs/serveguard.md](docs/serveguard.md).
 
 ### Individual Steps
 
@@ -331,12 +353,13 @@ model
 | `rosa_cluster` | Create/wait for ROSA HCP cluster |
 | `cluster_access` | Grant OCM roles (supports multi-user profiles) |
 | `gpu_machinepool` | GPU machine pool with taint, wait for node |
-| `operators` | Install NFD, GPU, Serverless, ServiceMesh, RHOAI |
+| `operators` | Install the operators in `operators_enabled` (default: NFD, GPU, Serverless, ServiceMesh, RHOAI; ServeGuard: cert-manager, RHOAI) |
 | `gpu_stack` | NFD instance + ClusterPolicy, wait for GPU allocatable |
-| `ai_platform` | DSCI + DataScienceCluster + KServe + mesh |
+| `ai_platform` | DSCI + DataScienceCluster + KServe + mesh (`ai_platform_mode: serverless`), or DSC v2 KServe-standard only (`standard`) |
 | `pull_secret` | Registry credentials in target namespace |
 | `model` | ServingRuntime + InferenceService, wait for Ready |
 | `llm_d` | Disaggregated prefill/decode via Helm (llm-d) |
+| `serveguard_demo` | ServeGuard demo via the serveguard Makefile (`demo-up`, `demo-stories`, `demo-down`) |
 
 ## Design
 

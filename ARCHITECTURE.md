@@ -281,6 +281,25 @@ If OCM releases a new API version (e.g., `accounts_mgmt/v2`):
    ansible-playbook playbooks/step-cluster-access.yml -e @profiles/my-team.yml
    ```
 
+### Selecting Operators and the AI Platform Shape
+
+Two variables in `inventory/group_vars/all/config.yml` decide what the shared roles
+install. Their defaults are the Knative stack the Mistral scenarios use:
+
+```yaml
+operators_enabled: [nfd, gpu, serverless, servicemesh, rhoai]   # keys of versions.operators
+rhoai_channel: "{{ versions.operators.rhoai.channel }}"
+ai_platform_mode: serverless       # standard = DSC v2, KServe RawDeployment only
+```
+
+Channels and packages stay in `versions.yml`. Where each operator lives
+(namespaces, `OperatorGroup`, `Subscription`, proof CRDs) is in
+`roles/operators/defaults/main.yml` (`operators_install`). To add an operator,
+add an entry to both files and list its key in a scenario's `operators_enabled`.
+`ai_platform` dispatches each phase to `_<phase>_<mode>.yml`. A new platform shape
+is a new set of those three files plus an entry in `ai_platform_api_versions`.
+See `scenarios/serveguard/*.yml` for a scenario that uses both.
+
 ### Adding a New Scenario
 
 Create `scenarios/my-scenario.yml`:
