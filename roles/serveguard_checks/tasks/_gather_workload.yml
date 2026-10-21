@@ -12,10 +12,13 @@
   ansible.builtin.set_fact:
     _sg_coll: "{{ (_sg_coll_list.stdout | from_json) | sg_collection_location(serveguard_collection) if _sg_coll_list.rc == 0 else none }}"
 
+# Read as plain YAML (not include_vars): the values template each other and the
+# environment, and must not become play variables of this repository.
 - name: Read the collection's role defaults
-  ansible.builtin.include_vars:
-    file: "{{ _sg_coll.path }}/roles/{{ item }}/defaults/main.yml"
-    name: "_sg_coll_defaults_{{ item }}"
+  ansible.builtin.set_fact:
+    "_sg_coll_defaults_{{ item }}": >-
+      {{ lookup('ansible.builtin.file', _sg_coll.path ~ '/roles/' ~ item ~ '/defaults/main.yml')
+         | from_yaml | default({}, true) }}
   loop: "{{ serveguard_collection_roles }}"
   when:
     - _sg_coll is not none
@@ -28,6 +31,7 @@
       defaults: >-
         {{ serveguard_collection_roles | map('regex_replace', '^', '_sg_coll_defaults_')
            | map('extract', vars) | select('defined') | select('mapping') | list
-           | sg_merge_dicts }}
-      overrides: >-
-        {{ serveguard_workload_vars.values() | list | sg_defined_vars(vars) }}
+           | sg_merge_dicts | sg_resolve_defaults(_sg_overrides) }}
+      overrides: "{{ _sg_overrides }}"
+  vars:
+    _sg_overrides: "{{ serveguard_workload_vars.values() | list | sg_defined_vars(vars) }}"

@@ -6,5 +6,5 @@
 - name: "stub publisher: supply-chain facts (ADR-0001)"
   ansible.builtin.set_fact:
     serveguard_adapter_ref: "{{ stub_adapter_ref | default('oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:' ~ 'b' * 64) }}"
-    serveguard_attestations: "{{ stub_attestations | default({'confinement': 'sha256:' ~ 'c' * 64, 'oms': 'sha256:' ~ 'd' * 64, 'provenance': 'sha256:' ~ 'e' * 64}) }}"
+    serveguard_attestations: "{{ stub_attestations | default({'oms': 'd' * 64, 'confinement': 'c' * 64, 'provenance': 'e' * 64}) }}"
   when: stub_supply_chain | default(false) | bool

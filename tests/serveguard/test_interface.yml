@@ -25,10 +25,18 @@
       vars:
         serveguard_checks_mode: enforce
 
-    - name: Read the real common defaults directly
-      ansible.builtin.include_vars:
-        file: "{{ real }}/roles/common/defaults/main.yml"
-        name: _real_defaults
+    - name: Read the real common defaults directly (rendered like a run would)
+      ansible.builtin.set_fact:
+        _real_defaults: >-
+          {{ lookup('ansible.builtin.file', real ~ '/roles/common/defaults/main.yml') | from_yaml
+             | sg_resolve_defaults({'serveguard_predictor_cpu': expect_override} if expect_override is defined else {}) }}
+
+    - name: Templated defaults resolve offline (keys dir under the work dir)
+      ansible.builtin.assert:
+        that:
+          - _real_defaults.serveguard_signing_keys_dir == _real_defaults.serveguard_work_dir ~ '/keys'
+          - _real_defaults.serveguard_signing_keys_dir is not search('[{][{]')
+          - _sg_workload.signing_keys_dir == _real_defaults.serveguard_signing_keys_dir
 
     - name: pre_workload maps every variable to the collection's own default
       ansible.builtin.assert:
@@ -40,14 +48,12 @@
           - _sg_workload.namespace == 'serveguard-demo'
           - _sg_workload.publisher_namespace == 'sg-publisher'
           - _sg_workload.verifier_namespace == 'sg-verifier'
+          - _sg_workload.supply_chain
+          - _sg_workload.attestation_namespace == 'sg-attestations'
+          - _sg_workload.signing_mode == 'keypair' and _sg_workload.enforcer == 'vap'
         fail_msg: "unmapped (not in the collection): {{ _unmapped }}"
       vars:
-        # Before ADR-0001 is merged the collection lacks the supply-chain variables;
-        # they are allowed missing only then (pre_workload uses the announced defaults).
-        _unmapped: >-
-          {{ serveguard_workload_vars.values() | reject('in', _real_defaults)
-             | reject('in', [] if 'serveguard_signing_mode' in _real_defaults else serveguard_workload_fallbacks)
-             | list }}
+        _unmapped: "{{ serveguard_workload_vars.values() | reject('in', _real_defaults) | list }}"
 
     - name: Every mapped value equals the real default (or the -e override, which wins)
       ansible.builtin.assert:
@@ -57,7 +63,7 @@
            else (_real_defaults[item.value] | string))
         fail_msg: "{{ item.key }}: {{ _sg_workload[item.key] }} != {{ _real_defaults[item.value] }}"
         quiet: true
-      loop: "{{ serveguard_workload_vars | dict2items | selectattr('value', 'in', _real_defaults) | list }}"
+      loop: "{{ serveguard_workload_vars | dict2items }}"
       loop_control:
         label: "{{ item.value }}"
 
@@ -86,6 +92,33 @@
       ansible.builtin.assert:
         that: _includes | reject('search', '^teardown/') | list == _demo_order + ['serving_consumer/tasks/serve']
         fail_msg: "ours {{ _includes }} vs demo.yml {{ _demo_order }}"
+
+    # The facts assert_supply_chain.yml / stories_banner.yml read, as the real roles set them.
+    - name: The real roles set the supply-chain facts this repository asserts
+      ansible.builtin.assert:
+        that:
+          - _pub is search('serveguard_adapter_ref:')
+          - _pub is search('serveguard_attestations:')
+          - _admit is search('serveguard_vsa:')
+          - _admit is search('adapter_ref:') and _admit is search('admitted:') and _admit is search('reason:')
+          - _anchor is search('serveguard_rendered[.]anchor_signed')
+          - _common is search('serveguard_rendered:')
+          - _chain is search('attestations\\["oms"\\]') and _chain is search('attestations\\["confinement"\\]')
+          - _keygen is search('[.]key') and _keygen is search("\\['operator'\\]")
+        fail_msg: "the collection's supply-chain facts changed; update assert_supply_chain.yml"
+      vars:
+        _pub: "{{ lookup('ansible.builtin.file', real ~ '/roles/publisher/tasks/main.yml') }}"
+        _admit: "{{ lookup('ansible.builtin.file', real ~ '/roles/public_verifier/tasks/admit.yml') }}"
+        _anchor: "{{ lookup('ansible.builtin.file', real ~ '/roles/trust_anchor/tasks/main.yml') }}"
+        _common: "{{ lookup('ansible.builtin.file', real ~ '/roles/common/tasks/main.yml') }}"
+        _keygen: "{{ _common }}"
+        _chain: "{{ lookup('ansible.builtin.file', real ~ '/../../supply-chain/src/serveguard_supplychain/chain.py') }}"
+
+    - name: serveguard_serving_result carries no adapter reference (the after-stories note applies)
+      ansible.builtin.debug:
+        msg: "serving_consumer serve sets adapter_ref: {{ _serve is search('adapter_ref') }}"
+      vars:
+        _serve: "{{ lookup('ansible.builtin.file', real ~ '/roles/serving_consumer/tasks/serve.yml') }}"
 
     - name: Pool sizing with the real requests (plan check)
       ansible.builtin.include_role: { name: serveguard_checks, tasks_from: _evaluate_quota.yml }

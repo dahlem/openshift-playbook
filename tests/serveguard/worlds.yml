@@ -48,6 +48,17 @@ _workload_stub:
     serveguard_publisher_namespace: sg-publisher
     serveguard_verifier_namespace: sg-verifier
     serveguard_logrows: 19
+    serveguard_signing_mode: keypair
+    serveguard_signing_keys_dir: /home/demo/.cache/serveguard-openshift-ai/keys
+    serveguard_enforcer: vap
+    serveguard_registry: image-registry.openshift-image-registry.svc:5000
+    serveguard_attestation_namespace: sg-attestations
+    serveguard_rhtas_namespace: trusted-artifact-signer
+    serveguard_rhtas_trust_config: ""
+    serveguard_rhtas_oidc_issuer: ""
+    serveguard_fulcio_audience: sigstore
+    serveguard_attestation_uri_base: https://serveguard.invalid/attestation
+    serveguard_kyverno_namespace: kyverno
     serveguard_namespace: serveguard-demo
     serveguard_image: ""
     serveguard_storage_class: ""
@@ -85,7 +96,7 @@ worlds:
   all_satisfied:
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
-    signing: { keys: { operator: [k/operator.pem], publisher: [k/publisher.pem], verifier: [k/verifier.pem] } }
+    signing: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.key, k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
     image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
     cluster: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }

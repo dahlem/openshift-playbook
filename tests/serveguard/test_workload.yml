@@ -97,13 +97,13 @@
               - _sg_admitted_digest is match('^oci://.+@sha256:[0-9a-f]{64}$')
               - stub_calls == _demo_order
 
-    - name: A VSA that did not pass fails right after admit
-      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { digest: "sha256:{{ 'f' * 64 }}", result: FAILED } }
+    - name: A VSA that did not admit fails right after admit
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { adapter_ref: "oci://r/a@sha256:{{ 'b' * 64 }}", admitted: false, reason: "certificate does not verify" } }
       block:
-        - name: Run with a FAILED VSA
+        - name: Run with a refused VSA
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
         - name: Not reached
-          ansible.builtin.fail: { msg: "FAILED VSA was not caught" }
+          ansible.builtin.fail: { msg: "refused VSA was not caught" }
       rescue:
         - name: The admit assertion fired before serving
           ansible.builtin.assert:
@@ -123,10 +123,10 @@
           ansible.builtin.assert:
             that: "'publisher: supply-chain facts' in ansible_failed_result.msg"
 
-    - name: Missing attestation digests fail after the publisher
-      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_attestations: { confinement: "sha256:{{ 'c' * 64 }}" } }
+    - name: A missing OMS attestation fails after the publisher
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_attestations: { confinement: "{{ 'c' * 64 }}" } }
       block:
-        - name: Run with one attestation only
+        - name: Run without the OMS signature
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
         - name: Not reached
           ansible.builtin.fail: { msg: "missing attestations were not caught" }
@@ -134,6 +134,30 @@
         - name: The publisher assertion fired
           ansible.builtin.assert:
             that: "'publisher: supply-chain facts' in ansible_failed_result.msg"
+
+    - name: A VSA for another digest fails right after admit
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { adapter_ref: "oci://r/a@sha256:{{ '0' * 64 }}", admitted: true, reason: admitted } }
+      block:
+        - name: Run with a VSA naming another digest
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "foreign-digest VSA was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: supply-chain facts' in ansible_failed_result.msg"
+
+    - name: An unsigned trust anchor fails after trust_anchor
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_anchor_signed: false }
+      block:
+        - name: Run with an unsigned anchor
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "unsigned anchor was not caught" }
+      rescue:
+        - name: The trust-anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: supply-chain facts' in ansible_failed_result.msg"
 
     - name: A malformed trust-anchor digest fails after trust_anchor
       vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_anchor_digest: "not-a-digest" }
@@ -152,8 +176,9 @@
       vars:
         serveguard_stories_result: [{ story: query, expected: served, verdict: served, reason: "", as_expected: true }]
         serveguard_adapter_ref: "oci://r/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}"
-        serveguard_vsa: { digest: "sha256:{{ 'f' * 64 }}", result: PASSED }
-        serveguard_anchor_bundle_digest: "sha256:{{ 'a' * 64 }}"
+        serveguard_vsa: { adapter_ref: "oci://r/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", admitted: true, reason: admitted }
+        serveguard_rendered: { anchor_digest: "{{ 'a' * 64 }}", anchor_signed: true }
+        _sg_workload: { attestation_uri_base: "https://serveguard.invalid/attestation" }
 
     - name: The banner lines
       ansible.builtin.assert:
@@ -161,11 +186,13 @@
           - _adapter_lines | length == 1
           - _vsa_lines | length == 1
           - _anchor_lines | length == 1
+          - _uri_lines | length == 1
         fail_msg: "{{ _sg_banner | to_json }}"
       vars:
         _adapter_lines: "{{ _sg_banner | select('match', '^  adapter: +oci://r/sg-publisher/serveguard-adapter@sha256:b{64}$') | list }}"
-        _vsa_lines: "{{ _sg_banner | select('match', '^  VSA: +sha256:f{64} [(]PASSED[)]$') | list }}"
-        _anchor_lines: "{{ _sg_banner | select('match', '^  trust anchor: sha256:a{64}$') | list }}"
+        _vsa_lines: "{{ _sg_banner | select('match', '^  VSA: +admitted for oci://r/sg-publisher/serveguard-adapter@sha256:b{64} [(]admitted[)]$') | list }}"
+        _anchor_lines: "{{ _sg_banner | select('match', '^  trust anchor: a{64} [(]operator-signed[)]$') | list }}"
+        _uri_lines: "{{ _sg_banner | select('match', '^  WARNING: +attestation URIs use the placeholder https://serveguard.invalid/attestation$') | list }}"
 
     - name: Teardown resolves
       ansible.builtin.include_role:

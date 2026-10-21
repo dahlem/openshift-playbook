@@ -32,17 +32,27 @@
          | reject('in', (serveguard_serving_result.annotations | default({})) | dict2items
                         | rejectattr('value', 'falsy') | map(attribute='key') | list) | list }}
     _sg_sc: "{{ _sg_workload.supply_chain | default(false) | bool }}"
-    # With supply chain: the reference the served InferenceService names
-    # (SERVEGUARD_ADAPTER_REF), if serveguard_serving_result reports it; else the
-    # publisher's serveguard_adapter_ref (then the comparison cannot detect a change).
+    # With supply chain the annotations are gone and serveguard_serving_result carries no
+    # adapter reference: the comparison then uses serveguard_serving_result.adapter_ref
+    # only if a future collection adds it (see the note task below).
     _sg_digest_now: >-
-      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref | default(''))
+      {{ serveguard_serving_result.adapter_ref | default(_sg_digest_before | default(''))
          if (_sg_workload.supply_chain | default(false) | bool)
          else (serveguard_serving_result.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}
+
+- name: The served adapter reference is not observable from the collection's facts
+  ansible.builtin.debug:
+    msg: >-
+      serveguard_serving_result has no adapter_ref: the unchanged-digest check after the
+      stories relies on the guard (which refuses other bytes) and on the stories' own verdicts.
+  when:
+    - _sg_digest_before | default('') | length > 0
+    - _sg_workload.supply_chain | default(false) | bool
+    - serveguard_serving_result.adapter_ref is not defined
 
 - name: Remember the admitted adapter digest (the digest-pinned adapter ref with supply chain)
   ansible.builtin.set_fact:
     _sg_admitted_digest: >-
-      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref)
+      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref | default(''))
          if (_sg_workload.supply_chain | default(false) | bool)
          else serveguard_serving_result.annotations['serveguard.io/adapter-digest'] }}

@@ -54,6 +54,8 @@
       rhtas_trust_config: ""
       rhtas_oidc_issuer: ""
       fulcio_audience: sigstore
+      attestation_uri_base: https://attest.example.org/serveguard
+      kyverno_namespace: kyverno
     # Variables a case may override; reset to these before each case.
     _test_defaults:
       serveguard_openshift_range: guide

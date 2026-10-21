@@ -5,7 +5,10 @@
       {{ _sg_raw_kyverno | sg_eval_kyverno({
            'enforcer': _sg_workload.enforcer | default('vap'),
            'min': versions.serveguard.requirements.kyverno_min,
-           'allow_existing': serveguard_allow_existing_kyverno | bool }) }}
+           'allow_existing': serveguard_allow_existing_kyverno | bool,
+           'namespace': _sg_workload.kyverno_namespace | default('kyverno'),
+           'registry': _sg_workload.registry | default(''),
+           'internal': (_sg_workload.registry | default('')) is match('image-registry.openshift-image-registry.svc') }) }}
 
 - name: Keep the Kyverno decision
   ansible.builtin.set_fact:

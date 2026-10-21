@@ -27,8 +27,13 @@
           '=' * 60, '']
          + (serveguard_stories_result | map('sg_story_lines') | flatten)
          + ([''] + ['  adapter:      ' ~ serveguard_adapter_ref] if serveguard_adapter_ref is defined else [])
-         + (['  VSA:          ' ~ serveguard_vsa.digest ~ ' (' ~ serveguard_vsa.result ~ ')'] if serveguard_vsa is defined else [])
-         + (['  trust anchor: ' ~ serveguard_anchor_bundle_digest] if serveguard_anchor_bundle_digest is defined else [])
+         + (['  VSA:          ' ~ ('admitted' if serveguard_vsa.admitted | bool else 'REFUSED') ~ ' for '
+             ~ serveguard_vsa.adapter_ref ~ ((' (' ~ serveguard_vsa.reason ~ ')') if serveguard_vsa.reason else '')]
+            if serveguard_vsa is defined else [])
+         + (['  trust anchor: ' ~ serveguard_rendered.anchor_digest ~ ' (operator-signed)']
+            if (serveguard_rendered.anchor_digest | default('')) | length > 0 else [])
+         + (['  WARNING:      attestation URIs use the placeholder ' ~ _sg_workload.attestation_uri_base]
+            if (_sg_workload.attestation_uri_base | default('')) is search('[.]invalid(/|$)') else [])
          + ['', '=' * 60, ''] }}
 
 - name: ServeGuard story summary

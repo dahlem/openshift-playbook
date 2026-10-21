@@ -1,12 +1,13 @@
 ---
-# Read-only, local: which key pairs already exist (keypair mode).
+# Read-only, local: which <role>.key / <role>.pub files already exist. The operator key
+# signs the trust anchor in every mode; publisher and verifier keys in keypair mode.
 - name: Find existing signing keys
   ansible.builtin.find:
     paths: "{{ _sg_workload.signing_keys_dir | default('') }}"
-    patterns: "{{ item }}*"
+    patterns: ["{{ item }}.key", "{{ item }}.pub"]
   register: _sg_keys
   loop: [operator, publisher, verifier]
-  when: (_sg_workload.signing_mode | default('keypair')) == 'keypair' and (_sg_workload.signing_keys_dir | default('')) is directory
+  when: (_sg_workload.signing_keys_dir | default('')) is directory
 
 - name: Collect signing facts
   ansible.builtin.set_fact:

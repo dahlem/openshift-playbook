@@ -1,7 +1,11 @@
 ---
-# Supply-chain facts the collection sets (ADR-0001 §5.4), asserted after the role
-# that sets them. Input: _sg_stage = trust_anchor | publisher | admit. Skipped (with
-# a note) when the installed collection predates supply-chain attestation.
+# Supply-chain facts of serveguard.openshift_ai (ADR-0001), asserted after the role
+# that sets them. Input: _sg_stage = trust_anchor | publisher | admit. Skipped (with a
+# note) for a collection that predates supply-chain attestation.
+#   trust_anchor  serveguard_rendered.anchor_digest, anchor_signed (operator key, every mode)
+#   publisher     serveguard_adapter_ref (digest-pinned), serveguard_attestations
+#                 {oms, confinement[, provenance]: sha256 of each attached bundle}
+#   admit         serveguard_vsa {adapter_ref, admitted, reason}: admitted, same digest
 
 - name: Collection without supply-chain attestation
   ansible.builtin.debug:
@@ -14,25 +18,28 @@
     that: "{{ _sg_checks_by_stage[_sg_stage] }}"
     fail_msg: >-
       {{ _sg_stage }}: supply-chain facts missing or malformed:
-      anchor={{ serveguard_anchor_bundle_digest | default('undefined') }},
+      anchor={{ (serveguard_rendered | default({})).anchor_digest | default('undefined') }}
+      (signed={{ (serveguard_rendered | default({})).anchor_signed | default('undefined') }}),
       adapter_ref={{ serveguard_adapter_ref | default('undefined') }},
       attestations={{ serveguard_attestations | default('undefined') | to_json }},
       vsa={{ serveguard_vsa | default('undefined') | to_json }}
   vars:
     _sg_digest: '^(sha256:)?[0-9a-f]{64}$'
+    _sg_ref: '^oci://[^@\s]+@sha256:[0-9a-f]{64}$'
     _sg_checks_by_stage:
       trust_anchor:
-        - serveguard_anchor_bundle_digest is defined
-        - serveguard_anchor_bundle_digest is match(_sg_digest)
+        - serveguard_rendered is defined
+        - serveguard_rendered.anchor_digest | default('') is match(_sg_digest)
+        - serveguard_rendered.anchor_signed | default(false) | bool
       publisher:
-        # digest-pinned: oci://<registry>/<repo>@sha256:<64 hex>, never a tag
         - serveguard_adapter_ref is defined
-        - serveguard_adapter_ref is match('^oci://[^@\s]+@sha256:[0-9a-f]{64}$')
+        - serveguard_adapter_ref is match(_sg_ref)
         - serveguard_attestations is defined
         - serveguard_attestations is mapping
-        - serveguard_attestations | length >= 3
+        - "'oms' in serveguard_attestations and 'confinement' in serveguard_attestations"
         - serveguard_attestations.values() | map('string') | reject('match', _sg_digest) | list | length == 0
       admit:
         - serveguard_vsa is defined
-        - serveguard_vsa.result | default('') == 'PASSED'
-        - serveguard_vsa.digest | default('') is match(_sg_digest)
+        - serveguard_vsa.admitted | default(false) | bool
+        - serveguard_vsa.adapter_ref | default('') is match(_sg_ref)
+        - serveguard_vsa.adapter_ref == serveguard_adapter_ref

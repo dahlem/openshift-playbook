@@ -740,7 +740,8 @@ SIGNING_ROLES = ("operator", "publisher", "verifier")
 
 
 def sg_eval_signing(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: keys {role: [files]} found in signing_keys_dir.
+    """raw: keys {role: [file names]} found in signing_keys_dir (the collection writes
+    <role>.key and <role>.pub).
     req: mode, enforcer, keys_dir, openshift_version (cluster's or the one to create),
     rhtas_min, rhtas_max_exclusive."""
     step = "signing"
@@ -755,19 +756,29 @@ def sg_eval_signing(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
     rows.append(_row(step, "mode", "ok", f"{mode} signing, {enforcer} enforcement"
                      + ("; the guard verifies the VSA, the VAP is the first gate" if enforcer == "vap"
                         else "; Kyverno also requires the VSA at admission")))
-    if mode == "keypair":
-        keys = raw.get("keys") or {}
-        present = [r for r in SIGNING_ROLES if keys.get(r)]
-        if not present:
-            rows.append(_row(step, "key pairs", "todo", f"the collection generates operator/publisher/verifier keys in {req.get('keys_dir')}"))
-        elif len(present) < len(SIGNING_ROLES):
-            missing = [r for r in SIGNING_ROLES if r not in present]
-            rows.append(_row(step, "key pairs", "conflict",
-                             f"only {', '.join(present)} in {req.get('keys_dir')}; missing {', '.join(missing)}. "
-                             "A partial set would pin mismatched identities: restore the missing keys or move the directory away"))
-        else:
-            rows.append(_row(step, "key pairs", "ok", f"reusing operator/publisher/verifier keys in {req.get('keys_dir')}"))
+    # The operator key signs the trust anchor in every mode; publisher and verifier keys
+    # exist only in keypair mode (keyless: Fulcio certificates for their service accounts).
+    roles = SIGNING_ROLES if mode == "keypair" else ("operator",)
+    keys = raw.get("keys") or {}
+    names = {r: {_basename(f) for f in keys.get(r) or []} for r in roles}
+    complete = [r for r in roles if {f"{r}.key", f"{r}.pub"} <= names[r]]
+    half = [r for r in roles if names[r] & {f"{r}.key", f"{r}.pub"} and r not in complete]
+    absent = [r for r in roles if not names[r] & {f"{r}.key", f"{r}.pub"}]
+    if half:
+        rows.append(_row(step, "key pairs", "conflict",
+                         f"half pairs in {req.get('keys_dir')}: {', '.join(half)} (need <role>.key and <role>.pub). "
+                         "The collection generates a pair only when <role>.key is absent: restore the missing half "
+                         "or move the directory away"))
+    elif absent and complete:
+        rows.append(_row(step, "key pairs", "todo",
+                         f"reusing {', '.join(complete)}; the collection generates {', '.join(absent)} in {req.get('keys_dir')}"))
+    elif absent:
+        rows.append(_row(step, "key pairs", "todo",
+                         f"the collection generates {', '.join(f'{r}.key/.pub' for r in roles)} in {req.get('keys_dir')}"))
     else:
+        rows.append(_row(step, "key pairs", "ok", f"reusing {', '.join(roles)} key pairs in {req.get('keys_dir')}"))
+    if mode == "keyless":
+        rows.append(_row(step, "trust anchor", "ok", "operator-signed with operator.key also in keyless mode"))
         v = req.get("openshift_version")
         lo, hi = req["rhtas_min"], req["rhtas_max_exclusive"]
         if not v:
@@ -780,6 +791,10 @@ def sg_eval_signing(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
     return {"rows": rows, "action": "none"}
 
 
+def _basename(path: str) -> str:
+    return str(path).rsplit("/", 1)[-1]
+
+
 def _image_version(deployments: list[dict[str, Any]]) -> str | None:
     for d in deployments or []:
         for c in ((d.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or []:
@@ -790,8 +805,10 @@ def _image_version(deployments: list[dict[str, Any]]) -> str | None:
 
 
 def sg_eval_kyverno(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: cluster_reachable, crd, subscription (ours)|None, deployments [admission controller].
-    req: enforcer, min, allow_existing."""
+    """raw: cluster_reachable, crd, subscription (ours)|None, deployments [admission controller],
+    secrets [names of kubernetes.io/dockerconfigjson Secrets in the admission controller's namespace].
+    req: enforcer, min, allow_existing, namespace (the collection's serveguard_kyverno_namespace),
+    registry, internal (the registry is OpenShift's internal one)."""
     step = "kyverno"
     if req.get("enforcer") != "kyverno":
         return {"rows": [_row(step, "Kyverno", "n/a", "serveguard_enforcer is vap; not needed")], "action": "none"}
@@ -816,6 +833,7 @@ def sg_eval_kyverno(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
             rows.append(_row(step, "version", "fail", f"Kyverno {version} < {req['min']} (verifyImages attestations, imageExtractors)"))
         else:
             rows.append(_row(step, "version", "ok", f"{version} >= {req['min']}"))
+        rows += _kyverno_access_rows(deps, raw, req)
         if ready and not _blocking(rows):
             rows.append(_row(step, "admission controller", "satisfied", "ready"))
             return {"rows": rows, "action": "accept" if not ours else "satisfied"}
@@ -825,6 +843,36 @@ def sg_eval_kyverno(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
     if ours:
         return {"rows": [_row(step, "Kyverno", "todo", "operator subscribed; its Kyverno instance is created next")], "action": "instance"}
     return {"rows": [_row(step, "Kyverno", "todo", "will subscribe the operator and create its instance")], "action": "install"}
+
+
+def _kyverno_access_rows(deps: list[dict[str, Any]], raw: dict[str, Any], req: dict[str, Any]) -> list[dict[str, str]]:
+    """Kyverno must run where the collection grants registry pull (serveguard_kyverno_namespace),
+    and it reads the registry with --imagePullSecrets, not with its service-account token."""
+    step = "kyverno"
+    rows = []
+    where = sorted({(d.get("metadata") or {}).get("namespace", "") for d in deps} - {""})
+    want = req.get("namespace") or "kyverno"
+    if where and want not in where:
+        rows.append(_row(step, "namespace", "conflict",
+                         f"Kyverno runs in {', '.join(where)}, but the collection grants attestation pull to "
+                         f"{want}: set serveguard_kyverno_namespace={where[0]}"))
+    elif where:
+        rows.append(_row(step, "namespace", "ok", f"{want} (granted image-puller on the attestation repository)"))
+    args = [a for d in deps for c in (((d.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+            for a in (c.get("args") or [])]
+    named = [s for a in args if a.startswith("--imagePullSecrets=") for s in a.split("=", 1)[1].split(",") if s]
+    present = set(raw.get("secrets") or [])
+    if named and all(s in present for s in named):
+        rows.append(_row(step, "registry credentials", "ok", f"--imagePullSecrets={','.join(named)}"))
+    elif named:
+        rows.append(_row(step, "registry credentials", "fail",
+                         f"--imagePullSecrets names {', '.join(s for s in named if s not in present)}, which does not exist in {want}"))
+    else:
+        rows.append(_row(step, "registry credentials", "warn" if req.get("internal") else "ok",
+                         ("no --imagePullSecrets: Kyverno reads the internal registry anonymously and cannot fetch the VSA. "
+                          "Give it a pull secret for " + str(req.get("registry")) + " (see docs/serveguard.md)")
+                         if req.get("internal") else "none configured (registry assumed readable)"))
+    return rows
 
 
 RHTAS_COMPONENTS = ("Fulcio", "Rekor", "CTlog", "Trillian", "Tuf")
@@ -1027,7 +1075,6 @@ def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
                 "action": "none", "workload": {}}
     rows.append(_row(step, req["collection"], "ok", f"{coll.get('version', '?')} at {coll.get('path', '?')}"))
     defaults, overrides = raw.get("defaults") or {}, raw.get("overrides") or {}
-    fallbacks = req.get("fallbacks") or {}
     workload: dict[str, Any] = {"supply_chain": "serveguard_signing_mode" in defaults}
     for key, var in (req.get("names") or {}).items():
         if var in overrides:
@@ -1037,13 +1084,15 @@ def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
             workload[key] = defaults[var]
             if var in (req.get("required") or []):
                 rows.append(_row(step, var, "ok", f"{defaults[var]} (collection default)"))
-        elif var in fallbacks:
-            workload[key] = fallbacks[var]
-            rows.append(_row(step, var, "warn", f"{fallbacks[var]!s:.60} (ADR-0001 default; this collection does not declare it yet)"))
         elif var in (req.get("required") or []):
             rows.append(_row(step, var, "fail", f"not in the collection's role defaults; update the serveguard checkout"))
         else:
             rows.append(_row(step, var, "warn", "not declared by the collection; the checks that need it are skipped"))
+    base = str(workload.get("attestation_uri_base") or "")
+    if base and re.search(r"\.invalid(/|$)", base):
+        rows.append(_row(step, "attestation URI base", "warn",
+                         f"{base} is a placeholder namespace: predicate types, the VSA policy and verifier ids live under it. "
+                         "Set serveguard_attestation_uri_base to a domain or repository you control before sharing attestations"))
     return {"rows": rows, "action": "none", "workload": workload}
 
 
@@ -1258,6 +1307,41 @@ def sg_collection_location(listing: dict[str, Any], name: str) -> dict[str, str]
     return None
 
 
+def sg_resolve_defaults(raw: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Render a role-defaults file read as plain YAML: its values may template other
+    defaults (`{{ serveguard_work_dir }}/keys`) or the environment
+    (`lookup('ansible.builtin.env', 'HOME')`). Overrides win and feed the rendering, as
+    in a real run. A value that cannot be rendered offline is kept verbatim."""
+    import os
+
+    import jinja2
+
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+
+    def lookup(kind: str, name: str, *args: Any, **kwargs: Any) -> str:
+        if kind.endswith("env"):
+            return os.environ.get(name, "")
+        raise jinja2.UndefinedError(f"lookup {kind} is not resolvable offline")
+
+    values = dict(raw or {})
+    values.update(overrides or {})
+    for _ in range(8):
+        changed = False
+        for key, value in list(values.items()):
+            if key in (overrides or {}) or not isinstance(value, str) or "{{" not in value:
+                continue
+            try:
+                rendered = env.from_string(value).render({**values, "lookup": lookup})
+            except Exception:
+                continue
+            if rendered != value:
+                values[key] = rendered
+                changed = True
+        if not changed:
+            break
+    return {k: values[k] for k in (raw or {})}
+
+
 def sg_merge_dicts(dicts: list[dict[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for d in dicts or []:
@@ -1297,6 +1381,7 @@ class FilterModule:
             "sg_story_lines": sg_story_lines,
             "sg_collection_location": sg_collection_location,
             "sg_merge_dicts": sg_merge_dicts,
+            "sg_resolve_defaults": sg_resolve_defaults,
             "sg_defined_vars": sg_defined_vars,
             "sg_merge_rows": sg_merge_rows,
             "sg_command_results": sg_command_results,

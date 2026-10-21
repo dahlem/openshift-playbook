@@ -160,21 +160,38 @@ cases:
     raw: { keys: {} }
     expect: { blocking: false, status: { mode: ok, key pairs: todo }, detail: ["keypair signing, vap enforcement"] }
 
-  - name: keypair with all three keys -> reused
+  - name: keypair with all three pairs -> reused
     step: signing
-    raw: { keys: { operator: [k/operator.key], publisher: [k/publisher.key], verifier: [k/verifier.key] } }
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.key, k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
     expect: { blocking: false, status: { key pairs: ok } }
 
-  - name: keypair with a partial key set -> conflict
+  - name: keypair with a missing role -> the collection generates only that one
     step: signing
-    raw: { keys: { operator: [k/operator.key], publisher: [], verifier: [k/verifier.key] } }
-    expect: { blocking: true, status: { key pairs: conflict }, detail: ["missing publisher"] }
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [], verifier: [k/verifier.key, k/verifier.pub] } }
+    expect: { blocking: false, status: { key pairs: todo }, detail: ["reusing operator, verifier; the collection generates publisher"] }
+
+  - name: keypair with a half pair -> conflict
+    step: signing
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
+    expect: { blocking: true, status: { key pairs: conflict }, detail: ["half pairs in", "publisher"] }
+
+  - name: keyless with only the operator pair -> complete (publisher/verifier use Fulcio)
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: { operator: [k/operator.key, k/operator.pub] } }
+    expect: { blocking: false, status: { key pairs: ok }, detail: ["reusing operator key pairs"] }
+
+  - name: keyless needs the operator key (it signs the trust anchor)
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: { operator: [k/operator.key] } }
+    expect: { blocking: true, status: { key pairs: conflict, trust anchor: ok } }
 
   - name: keyless on a supported OpenShift -> ok
     step: signing
     workload: { signing_mode: keyless }
     raw: { keys: {} }
-    expect: { blocking: false, status: { RHTAS on OpenShift: ok }, detail: ["4.20.12 in 4.16.0 <= v < 4.22"] }
+    expect: { blocking: false, status: { RHTAS on OpenShift: ok, key pairs: todo }, detail: ["4.20.12 in 4.16.0 <= v < 4.22", "operator.key/.pub"] }
 
   - name: keyless on 4.22 (article range) -> RHTAS unsupported
     step: signing
@@ -200,11 +217,32 @@ cases:
     raw: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
     expect: { action: install, blocking: false, status: { Kyverno: todo } }
 
-  - name: our Kyverno, ready at 1.13 -> skip
+  - name: our Kyverno, ready at 1.13, with a registry pull secret -> skip
     step: kyverno
     workload: { enforcer: kyverno }
-    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-ready'] }}" }
-    expect: { action: satisfied, blocking: false, status: { version: ok, admission controller: satisfied } }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [sg-registry],
+           deployments: "{{ fx['kyverno-dep-ready'] | map('combine', {'spec': {'template': {'spec': {'containers': [{'name': 'kyverno', 'image': 'reg.nirmata.io/nirmata/kyverno:v1.13.4', 'args': ['--imagePullSecrets=sg-registry']}]}}}}) | list }}" }
+    expect: { action: satisfied, blocking: false, status: { version: ok, admission controller: satisfied, namespace: ok, registry credentials: ok } }
+
+  - name: Kyverno without pull credentials for the internal registry -> warn
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [], deployments: "{{ fx['kyverno-dep-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { registry credentials: warn }, detail: ["cannot fetch the VSA"] }
+
+  - name: Kyverno names a pull secret that does not exist -> fail
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [],
+           deployments: "{{ fx['kyverno-dep-ready'] | map('combine', {'spec': {'template': {'spec': {'containers': [{'name': 'kyverno', 'image': 'k:v1.13.4', 'args': ['--imagePullSecrets=sg-registry']}]}}}}) | list }}" }
+    expect: { action: none, blocking: true, status: { registry credentials: fail } }
+
+  - name: Kyverno in another namespace than the collection grants -> conflict
+    step: kyverno
+    workload: { enforcer: kyverno, kyverno_namespace: kyverno }
+    vars: { serveguard_allow_existing_kyverno: true }
+    raw: { cluster_reachable: true, crd: true, subscription: null, secrets: [], deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: none, blocking: true, status: { namespace: conflict }, detail: ["serveguard_kyverno_namespace=kyverno-helm"] }
 
   - name: our operator subscribed, no instance yet -> create the instance
     step: kyverno
@@ -224,9 +262,9 @@ cases:
     raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
     expect: { action: none, blocking: true, status: { existing Kyverno: conflict }, detail: ["admission controller in kyverno-helm"] }
 
-  - name: the Helm Kyverno with the override -> accepted, not subscribed
+  - name: the Helm Kyverno with the override (namespace aligned) -> accepted, not subscribed
     step: kyverno
-    workload: { enforcer: kyverno }
+    workload: { enforcer: kyverno, kyverno_namespace: kyverno-helm }
     vars: { serveguard_allow_existing_kyverno: true }
     raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
     expect: { action: accept, blocking: false, status: { existing Kyverno: override, version: ok } }
@@ -376,15 +414,34 @@ cases:
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-attestations'] | map('combine', {'metadata': {'namespace': 'other'}}) | list }}" }
     expect: { blocking: true, status: { "predictor + story Job": fail } }
 
-  - name: pending ADR-0001 variables fall back to the announced defaults (WARN)
+  - name: a supply-chain collection with the placeholder URI base -> WARN
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair, serveguard_enforcer: vap,
+                  serveguard_attestation_uri_base: "https://serveguard.invalid/attestation" }
+      overrides: {}
+    expect: { blocking: false, status: { attestation URI base: warn }, detail: ["placeholder namespace"],
+              workload: { signing_mode: keypair, enforcer: vap, supply_chain: true } }
+
+  - name: an owned URI base -> no warning
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair }
+      overrides: { serveguard_attestation_uri_base: "https://attest.example.org/serveguard" }
+    expect: { blocking: false, status: { attestation URI base: ~ } }
+
+  - name: a collection predating ADR-0001 -> supply_chain false
     step: workload
     raw:
       collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
       defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
                   serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
       overrides: {}
-    expect: { blocking: false, status: { serveguard_signing_mode: warn, serveguard_enforcer: warn }, detail: ["keypair (ADR-0001 default"],
-              workload: { signing_mode: keypair, enforcer: vap, attestation_namespace: sg-attestations, supply_chain: false } }
+    expect: { blocking: false, workload: { supply_chain: false } }
 
   # ---- cluster -------------------------------------------------------------------------
   - name: cluster absent -> create at the chosen version

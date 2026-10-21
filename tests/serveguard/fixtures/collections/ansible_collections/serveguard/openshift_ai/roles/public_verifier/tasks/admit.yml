@@ -5,5 +5,5 @@
 
 - name: "stub public_verifier admit: supply-chain fact (ADR-0001)"
   ansible.builtin.set_fact:
-    serveguard_vsa: "{{ stub_vsa | default({'digest': 'sha256:' ~ 'f' * 64, 'result': 'PASSED'}) }}"
+    serveguard_vsa: "{{ stub_vsa | default({'adapter_ref': serveguard_adapter_ref, 'admitted': true, 'reason': 'admitted'}) }}"
   when: stub_supply_chain | default(false) | bool

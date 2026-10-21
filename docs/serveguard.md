@@ -436,20 +436,42 @@ the digest differs. The collection repeats the check before copying.
 ## Supply-chain attestation
 
 The collection carries ServeGuard's results as standard supply-chain attestations
-(serveguard ADR-0001, `docs/architecture/ADR-0001-supply-chain-attestation.md`;
-not merged yet). The adapter is an OCI artifact, pulled by digest. The publisher
+(serveguard ADR-0001, `docs/architecture/ADR-0001-supply-chain-attestation.md`). The adapter is an OCI artifact, pulled by digest. The publisher
 attaches signed attestations to it: OpenSSF Model Signing, SLSA provenance and a
 ServeGuard confinement statement. The public verifier signs a SLSA Verification
 Summary Attestation (VSA) after the zero-knowledge base certificate verifies. The
 guard init-container verifies that VSA itself before vLLM starts. This repository
 installs or checks the cluster prerequisites; the collection does the signing.
 
+**Enforcement, in every mode:**
+1. **The guard.** It verifies the VSA, the confinement statement and the OMS
+   signature for the pulled digest, then runs the ServeGuard guard on the bytes.
+   This is the binding check, and it always runs.
+2. **Kyverno (optional, `serveguard_enforcer: kyverno`).** It refuses at the API
+   server an `InferenceService` whose adapter has no verifier-signed VSA.
+3. **The VAP.** It stays the cheap first gate: a digest-pinned adapter reference,
+   and only the verifier's service account may create serving objects.
+
+**Trust anchor.** The trust anchor is an operator-signed in-toto statement. It is
+carried in the `serveguard-trust-anchor` ConfigMap, together with `anchor.json`.
+It is signed with the operator key pair (`operator.key` in
+`serveguard_signing_keys_dir`) in **every** mode, including keyless; the operator
+key never leaves the controller. The verifier and the guard accept the anchor only
+under that pinned key.
+
+**Attestation URI base.** `serveguard_attestation_uri_base` defaults to the
+placeholder `https://serveguard.invalid/attestation`. Predicate types, the VSA
+policy URI and verifier ids live under it. The preflight's `workload` rows and the
+story banner show a `WARN` until you set it to a domain or repository path you
+control. The demo works with the placeholder, but don't share or register
+attestations under it.
+
 ### Modes
 
 | Mode | How to select it | Signing | Admission | Extra cluster prerequisites |
 |------|------------------|---------|-----------|------------------------------|
-| keypair + vap (default) | nothing | P-256 key pairs on the controller (`serveguard_signing_keys_dir`), one each for operator, publisher and verifier; no transparency log | VAP (digest-pinned adapter reference, writer = verifier SA); the guard verifies the VSA | none |
-| keyless + vap | `-e @scenarios/serveguard/keyless.yml` | each trust domain signs as its service account through RHTAS (Fulcio `kubernetes` issuer); entries in RHTAS's Rekor | as above | RHTAS operator 1.3.x + `Securesign` |
+| keypair + vap (default) | nothing | P-256 key pairs on the controller (`serveguard_signing_keys_dir`: `operator.key/.pub`, `publisher.key/.pub`, `verifier.key/.pub`; the publisher and verifier keys become per-domain Secrets); no transparency log | VAP (digest-pinned adapter reference, writer = verifier SA); the guard verifies the VSA | none |
+| keyless + vap | `-e @scenarios/serveguard/keyless.yml` | publisher and verifier sign as their service accounts through RHTAS (Fulcio `kubernetes` issuer; entries in RHTAS's Rekor); the operator still signs the trust anchor with `operator.key/.pub` | as above | RHTAS operator 1.3.x + `Securesign` |
 | keyless + kyverno | `-e @scenarios/serveguard/keyless-kyverno.yml` | as keyless | as above, plus a Kyverno `ClusterPolicy` that refuses an `InferenceService` whose adapter has no verifier-signed VSA (`PASSED`, policy digest = trust-anchor digest) | RHTAS + Kyverno >= 1.12 |
 
 Put the mode file **after** `cpu.yml` or `gpu.yml`. The mode variables
@@ -484,10 +506,37 @@ What each mode proves (given its signer is trusted; ADR-0001 §8):
 | 3 | RHTAS 1.3.x | `serveguard_signing_mode: keyless` | OpenShift in 4.16 <= v < 4.22 (RHTAS 1.3.6 supports 4.16–4.21, so `serveguard_openshift_range=article` with 4.22 fails); service-account issuer from `authentication.config.openshift.io/cluster` `spec.serviceAccountIssuer` (on ROSA HCP the cluster's OIDC config URL), or `serveguard_rhtas_oidc_issuer`; an existing `Securesign` that does not trust that issuer with `Type: kubernetes` is a `CONFLICT` unless `serveguard_allow_securesign_update=true` (adds it, keeps the others) | OLM Subscription `rhtas-operator`, then `Securesign` `securesign` in `trusted-artifact-signer` with Fulcio (issuer `Type: kubernetes`, client ID `serveguard_fulcio_audience`), Rekor, CTlog, Trillian and TUF | each component `Ready` (bounded; diagnostics); the Sigstore `ClientTrustConfig` exported to `serveguard_rhtas_trust_config_export` and passed to the collection as `serveguard_rhtas_trust_config`, with the issuer as `serveguard_rhtas_oidc_issuer` |
 | 4 | ClusterImagePolicy for the receiver image | `serveguard_cluster_image_policy: true` | OpenShift >= 4.20 (GA), or 4.19 with `serveguard_allow_cip_tech_preview=true`; `serveguard_receiver_image_public_key` present; an existing policy of the same name with another spec is a `CONFLICT`; `WARN`: support on ROSA HCP node pools is unverified; keyless roots (`FulcioCAWithRekor`) are not implemented here | `ClusterImagePolicy` `serveguard-receiver` (`PublicKey`, scope = the receiver image repository) | read back with the same spec |
 
-The keypair mode needs a writable `serveguard_signing_keys_dir`. The collection
-generates the three key pairs there. The preflight reuses a complete set and
-reports a partial one as a `CONFLICT`, because a partial set would pin mismatched
-identities.
+**Key files.** The collection generates absent pairs in `serveguard_signing_keys_dir`
+(`<role>.key`, `<role>.pub`). It generates `operator` in every mode, plus
+`publisher` and `verifier` in keypair mode, and skips a role whose `<role>.key`
+exists. The preflight reuses complete pairs and reports roles still to be
+generated as `TODO`. A half pair (a `.key` without its `.pub`, or the other way
+round) is a `CONFLICT`: the collection would not regenerate it, and it would pin
+mismatched identities.
+
+**Kyverno and the internal registry.** The collection grants Kyverno's namespace
+(`serveguard_kyverno_namespace`, default `kyverno`) `system:image-puller` on the
+attestation repository. Kyverno reads registries with the Secrets named by its
+admission controller's `--imagePullSecrets` flag, not with its service-account
+token. The preflight therefore checks two things. First, Kyverno must run in
+`serveguard_kyverno_namespace`; otherwise the grant misses it (`CONFLICT`).
+Second, its `--imagePullSecrets` must name existing `kubernetes.io/dockerconfigjson`
+Secrets. If none are named and the registry is the internal one, that is a `WARN`:
+Kyverno would read anonymously and could not fetch the VSA. To give it access:
+
+```bash
+NS=kyverno; SA=kyverno-admission-controller            # check: oc get sa -n $NS
+oc create secret docker-registry sg-registry -n $NS \
+  --docker-server=image-registry.openshift-image-registry.svc:5000 \
+  --docker-username=serviceaccount --docker-password="$(oc create token $SA -n $NS --duration=8760h)"
+# then add --imagePullSecrets=sg-registry to the admission controller (operator instance or Helm value
+# admissionController.container.extraArgs.imagePullSecrets=sg-registry)
+```
+
+The token expires, so renew it before it does. Whether the internal registry also
+lets Kyverno resolve the adapter manifest in the publisher's content repository
+(pull there is granted to the serving consumer only) is **unverified**. Check the
+first admission in `oc get policyreport -A` and in the admission controller's log.
 
 **Exporting the trust config.** The playbook walks RHTAS's TUF repository:
 `timestamp.json`, then `<n>.snapshot.json`, then `<m>.targets.json`. It fetches
@@ -514,18 +563,24 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace --version <ch
 
 | After | Fact | Must hold |
 |-------|------|-----------|
-| `trust_anchor` | `serveguard_anchor_bundle_digest` | a SHA-256 digest (the DSSE-signed trust-anchor bundle) |
+| `trust_anchor` | `serveguard_rendered.anchor_digest`, `.anchor_signed` | a SHA-256, and operator-signed (every mode) |
 | `publisher` | `serveguard_adapter_ref` | `oci://<registry>/<repo>@sha256:<64 hex>`: digest-pinned, never a tag |
-| `publisher` | `serveguard_attestations` | at least three digests (confinement, OMS, provenance) |
-| `public_verifier` admit | `serveguard_vsa` | `result: PASSED`, `digest` a SHA-256 |
-| `serving_consumer` serve (twice) | `serveguard_serving_result` | ready, guard exit code 0, the same adapter reference after the stories |
+| `publisher` | `serveguard_attestations` | `oms` and `confinement` present (`provenance` when built); each value the SHA-256 of its attached bundle |
+| `public_verifier` admit | `serveguard_vsa` = `{adapter_ref, admitted, reason}` | `admitted` true, and `adapter_ref` digest-pinned and equal to the publisher's |
+| `serving_consumer` serve (twice) | `serveguard_serving_result` | ready, guard exit code 0 |
 
-With the supply-chain collection, the `serveguard.io/admitted` and digest
-annotations are gone. The VSA and the guard carry the verdict. A collection that
-predates ADR-0001 is detected (it does not declare `serveguard_signing_mode`). For
-it, these assertions are skipped with a note, and the annotation checks apply. The
-story banner adds the adapter reference, the VSA digest and result, and the
-trust-anchor digest.
+The collection does not expose the VSA's own digest (`serveguard_vsa` has no
+digest field). The banner therefore shows the VSA verdict and the reference it
+covers, not a VSA digest. Inspect the VSA in the registry instead (below).
+`serveguard_serving_result` carries no adapter reference either. After the stories,
+the "same adapter digest" check therefore rests on the guard, which refuses any
+other bytes, and on the stories' own verdicts. A debug line says so. With the
+supply-chain collection, the `serveguard.io/admitted` and digest annotations are
+gone; the VSA and the guard carry the verdict. A collection that predates ADR-0001
+(it does not declare `serveguard_signing_mode`) is detected. For it, these
+assertions are skipped with a note, and the annotation checks apply. The story
+banner adds the adapter reference, the VSA verdict, the trust-anchor digest and,
+while it is the placeholder, a `WARNING` for the attestation URI base.
 
 ### Inspecting the VSA
 
