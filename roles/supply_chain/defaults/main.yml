@@ -1,0 +1,10 @@
+---
+# Cluster prerequisites of ServeGuard's supply-chain attestation (ADR-0001 §5.4):
+#   kyverno.yml       Kyverno instance + readiness   (serveguard_enforcer: kyverno)
+#   rhtas.yml         RHTAS Securesign + trust config (serveguard_signing_mode: keyless)
+#   image_policy.yml  ClusterImagePolicy for the receiver image (opt-in)
+# The operator Subscriptions come from the operators role; serveguard_checks decides
+# whether a step runs (pre_kyverno / pre_rhtas / pre_image_policy -> action).
+serveguard_rhtas_validate_certs: true
+serveguard_supply_chain_wait: 1200          # seconds, per bounded wait
+serveguard_fulcio_organization: ServeGuard demo

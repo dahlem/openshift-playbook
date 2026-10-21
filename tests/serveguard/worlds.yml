@@ -58,10 +58,15 @@ _ready_pod:
   spec: { nodeName: ip-10-0-1-3, containers: [{ name: c, resources: { requests: { cpu: "4", memory: 8Gi } } }] }
   status: { phase: Running }
 
+_workload_keyless_kyverno: >-
+  {{ _workload_stub | combine({'overrides': {'serveguard_signing_mode': 'keyless', 'serveguard_enforcer': 'kyverno'}}) }}
+
 worlds:
-  empty_account:
+  empty_account: &empty_account
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    signing: { keys: {} }
+    image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
     cluster: { exists: false, cluster: {} }
     versions: { cluster_exists: false, versions: "{{ _versions_list }}" }
@@ -70,6 +75,8 @@ worlds:
     quota: "{{ _quota_ok }}"
     operators: ["{{ _unreachable_op }}", "{{ _unreachable_op }}"]
     platform: { cluster_reachable: false }
+    kyverno: { cluster_reachable: false }
+    rhtas: { cluster_reachable: false }
     registry: { cluster_reachable: false }
     storage: { cluster_reachable: false }
     capacity: { cluster_reachable: false }
@@ -78,6 +85,8 @@ worlds:
   all_satisfied:
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    signing: { keys: { operator: [k/operator.pem], publisher: [k/publisher.pem], verifier: [k/verifier.pem] } }
+    image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
     cluster: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }
     versions: { cluster_exists: true, versions: "{{ _versions_list }}" }
@@ -90,6 +99,8 @@ worlds:
           subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
       - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
           subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    kyverno: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    rhtas: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
     platform: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-ready'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
     registry: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
     storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
@@ -99,6 +110,8 @@ worlds:
   mistral_cluster:   # an existing Knative/Mistral install on an old cluster
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    signing: { keys: {} }
+    image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
     cluster: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
     versions: { cluster_exists: true, versions: "{{ _versions_list }}" }
@@ -109,8 +122,15 @@ worlds:
       - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
       - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
           subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    kyverno: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    rhtas: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
     platform: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
     registry: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
     storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
     capacity: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
     workload: "{{ _workload_stub }}"
+
+  empty_account_keyless_kyverno:
+    <<: *empty_account
+    workload: "{{ _workload_keyless_kyverno }}"
+    operators: ["{{ _unreachable_op }}", "{{ _unreachable_op }}", "{{ _unreachable_op }}", "{{ _unreachable_op }}"]

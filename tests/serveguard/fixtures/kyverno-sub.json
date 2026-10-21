@@ -1,0 +1,10 @@
+{
+ "metadata": {
+  "name": "nirmata-kyverno-operator",
+  "namespace": "kyverno"
+ },
+ "spec": {
+  "name": "nirmata-kyverno-operator",
+  "channel": "stable"
+ }
+}

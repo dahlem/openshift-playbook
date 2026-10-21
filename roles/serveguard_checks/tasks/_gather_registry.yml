@@ -1,11 +1,17 @@
 ---
+- name: Is the internal registry used (receiver build or adapter registry)?
+  ansible.builtin.set_fact:
+    _sg_registry_needed: >-
+      {{ (_sg_workload.receiver_image | default('')) | length == 0
+         or (_sg_workload.registry | default('')) is match('image-registry.openshift-image-registry.svc') }}
+
 - name: Read the image registry config
   kubernetes.core.k8s_info:
     api_version: imageregistry.operator.openshift.io/v1
     kind: Config
     name: cluster
   register: _sg_reg_cfg
-  when: _sg_cluster_reachable | bool and (_sg_workload.receiver_image | default('')) | length == 0
+  when: _sg_cluster_reachable | bool and _sg_registry_needed | bool
 
 - name: Read the image registry deployment
   kubernetes.core.k8s_info:
@@ -13,7 +19,36 @@
     namespace: openshift-image-registry
     name: image-registry
   register: _sg_reg_dep
-  when: _sg_cluster_reachable | bool and (_sg_workload.receiver_image | default('')) | length == 0
+  when: _sg_cluster_reachable | bool and _sg_registry_needed | bool
+
+- name: Read the QuayRegistry (optional Quay)
+  kubernetes.core.k8s_info:
+    api_version: quay.redhat.com/v1
+    kind: QuayRegistry
+    namespace: "{{ serveguard_quay.namespace }}"
+    name: "{{ serveguard_quay.name }}"
+  register: _sg_quay
+  failed_when: false
+  when: _sg_cluster_reachable | bool and serveguard_quay | length > 0
+
+# The config bundle holds credentials: read only the one flag, never log it.
+- name: Read Quay's FEATURE_REFERRERS_API flag
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: "{{ serveguard_quay.namespace }}"
+    name: "{{ (_sg_quay.resources | first).spec.configBundleSecret }}"
+  register: _sg_quay_bundle
+  no_log: true
+  failed_when: false
+  when: _sg_quay.resources | default([]) | length > 0
+
+- name: Extract the flag
+  ansible.builtin.set_fact:
+    _sg_quay_referrers: >-
+      {{ ((_sg_quay_bundle.resources | default([]) | first | default({})).data | default({}))['config.yaml']
+         | default('') | b64decode | from_yaml | default({}, true) | sg_get('FEATURE_REFERRERS_API') | bool }}
+  no_log: true
+  when: _sg_quay_bundle.resources | default([]) | length > 0
 
 - name: Collect registry facts
   ansible.builtin.set_fact:
@@ -21,3 +56,6 @@
       cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
       config: "{{ _sg_reg_cfg.resources | default([]) | first | default(none) }}"
       deployment: "{{ _sg_reg_dep.resources | default([]) | first | default(none) }}"
+      quay:
+        registry: "{{ _sg_quay.resources | default([]) | first | default(none) }}"
+        referrers: "{{ _sg_quay_referrers | default(none) }}"

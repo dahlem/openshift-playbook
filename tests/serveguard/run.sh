@@ -22,10 +22,22 @@ run test_checks.yml
 run test_preflight.yml
 run test_identity.yml
 run test_workload.yml
+# RHTAS trust-config export against a fixture TUF repository on localhost.
+tuf="$(mktemp -d)"; port=$((20000 + RANDOM % 20000))
+python3 -m http.server "$port" --bind 127.0.0.1 --directory "$tuf" >/dev/null 2>&1 & srv=$!
+trap 'kill $srv 2>/dev/null; rm -rf "$tuf" ${coll:+"$coll"}' EXIT
+sleep 1
+for mode in plain with-sc corrupt; do
+  rm -rf "$tuf"/*
+  python3 "$here/make_tuf_fixture.py" "$tuf" $([ $mode = with-sc ] && echo --with-signing-config) $([ $mode = corrupt ] && echo --corrupt)
+  TUF_URL="http://127.0.0.1:$port" TRUST_OUT="$tuf/out/client-trust-config.json" \
+    WITH_SC=$([ $mode = with-sc ] && echo 1 || echo 0) CORRUPT=$([ $mode = corrupt ] && echo 1 || echo 0) \
+    run test_trust_config.yml -e trust_mode=$mode
+done
 # The real collection, from the sibling checkout, linked like an installed one.
 real="$repo/../serveguard/integrations/openshift-ai/ansible"
 if [ -f "$real/galaxy.yml" ]; then
-  coll="$(mktemp -d)"; trap 'rm -rf "$coll"' EXIT
+  coll="$(mktemp -d)"
   mkdir -p "$coll/ansible_collections/serveguard"
   ln -s "$(cd "$real" && pwd)" "$coll/ansible_collections/serveguard/openshift_ai"
   export SERVEGUARD_COLLECTION_DIR="$(cd "$real" && pwd)"

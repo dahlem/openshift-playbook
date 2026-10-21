@@ -154,6 +154,238 @@ cases:
     raw: { cluster_exists: true, versions: null }
     expect: { blocking: false, status: { version to create: n/a } }
 
+  # ---- supply-chain attestation (ADR-0001) ------------------------------------------------
+  - name: keypair + vap with no keys yet -> the collection generates them
+    step: signing
+    raw: { keys: {} }
+    expect: { blocking: false, status: { mode: ok, key pairs: todo }, detail: ["keypair signing, vap enforcement"] }
+
+  - name: keypair with all three keys -> reused
+    step: signing
+    raw: { keys: { operator: [k/operator.key], publisher: [k/publisher.key], verifier: [k/verifier.key] } }
+    expect: { blocking: false, status: { key pairs: ok } }
+
+  - name: keypair with a partial key set -> conflict
+    step: signing
+    raw: { keys: { operator: [k/operator.key], publisher: [], verifier: [k/verifier.key] } }
+    expect: { blocking: true, status: { key pairs: conflict }, detail: ["missing publisher"] }
+
+  - name: keyless on a supported OpenShift -> ok
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: {} }
+    expect: { blocking: false, status: { RHTAS on OpenShift: ok }, detail: ["4.20.12 in 4.16.0 <= v < 4.22"] }
+
+  - name: keyless on 4.22 (article range) -> RHTAS unsupported
+    step: signing
+    workload: { signing_mode: keyless }
+    facts: { _sg_versions: { version: "4.22.1" } }
+    raw: { keys: {} }
+    expect: { blocking: true, status: { RHTAS on OpenShift: fail } }
+
+  - name: unknown mode or enforcer -> fail
+    step: signing
+    workload: { signing_mode: gpg, enforcer: opa }
+    raw: { keys: {} }
+    expect: { blocking: true, status: { signing mode: fail, enforcer: fail } }
+
+  - name: vap enforcer -> Kyverno not needed
+    step: kyverno
+    raw: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    expect: { action: none, blocking: false, status: { Kyverno: n/a } }
+
+  - name: kyverno enforcer on a fresh cluster -> install
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    expect: { action: install, blocking: false, status: { Kyverno: todo } }
+
+  - name: our Kyverno, ready at 1.13 -> skip
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { version: ok, admission controller: satisfied } }
+
+  - name: our operator subscribed, no instance yet -> create the instance
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: false, subscription: "{{ fx['kyverno-sub'] }}", deployments: [] }
+    expect: { action: instance, blocking: false }
+
+  - name: our Kyverno not ready yet -> wait (instance step waits)
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-notready'] }}" }
+    expect: { action: instance, blocking: false, status: { admission controller: wait } }
+
+  - name: a Helm-installed Kyverno -> conflict
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: none, blocking: true, status: { existing Kyverno: conflict }, detail: ["admission controller in kyverno-helm"] }
+
+  - name: the Helm Kyverno with the override -> accepted, not subscribed
+    step: kyverno
+    workload: { enforcer: kyverno }
+    vars: { serveguard_allow_existing_kyverno: true }
+    raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: accept, blocking: false, status: { existing Kyverno: override, version: ok } }
+
+  - name: Kyverno 1.11 -> fail (verifyImages attestations need 1.12)
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-old'] }}" }
+    expect: { action: none, blocking: true, status: { version: fail } }
+
+  - name: keypair -> RHTAS not needed
+    step: rhtas
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
+    expect: { action: none, blocking: false, status: { RHTAS: n/a } }
+
+  - name: keyless, operator not installed yet -> create after it
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: create, blocking: false, status: { service-account issuer: ok, Securesign: todo }, detail: ["from authentication.config.openshift.io/cluster"] }
+
+  - name: keyless, Securesign trusting our issuer, all Ready -> skip
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-ours'] }}"], components: "{{ fx['rhtas-components-ready'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: satisfied, blocking: false, status: { Securesign: satisfied } }
+
+  - name: keyless, Rekor not Ready -> wait
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-ours'] }}"], components: "{{ fx['rhtas-components-partial'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: wait, blocking: false, detail: ["not Ready: Rekor"] }
+
+  - name: keyless, Securesign without the kubernetes issuer -> conflict
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-email'] }}"], components: "{{ fx['rhtas-components-ready'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: none, blocking: true, status: { Fulcio OIDC issuer: conflict } }
+
+  - name: keyless, Securesign has our issuer URL but as Type email -> conflict
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true,
+           securesigns: ["{{ fx['securesign-ours'] | combine({'spec': {'fulcio': {'config': {'OIDCIssuers': [{'Issuer': 'https://oidc.op1.openshiftapps.com/2abc', 'IssuerURL': 'https://oidc.op1.openshiftapps.com/2abc', 'ClientID': 'sigstore', 'Type': 'email'}]}}}}) }}"],
+           components: "{{ fx['rhtas-components-ready'] }}", issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: none, blocking: true, status: { Fulcio OIDC issuer: conflict } }
+
+  - name: keyless, missing issuer added with the override -> update
+    step: rhtas
+    workload: { signing_mode: keyless }
+    vars: { serveguard_allow_securesign_update: true }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-email'] }}", "{{ fx['securesign-other'] }}"],
+           components: "{{ fx['rhtas-components-ready'] }}", issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: update, blocking: false, status: { Fulcio OIDC issuer: override, other Securesign: warn } }
+
+  - name: keyless, no serviceAccountIssuer -> Kubernetes default, warned
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
+    expect: { blocking: false, status: { service-account issuer: warn }, detail: ["https://kubernetes.default.svc"] }
+
+  - name: keyless, issuer override wins over discovery
+    step: rhtas
+    workload: { signing_mode: keyless, rhtas_oidc_issuer: "https://issuer.example" }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { blocking: false, detail: ["https://issuer.example (from serveguard_rhtas_oidc_issuer)"] }
+
+  - name: ClusterImagePolicy disabled -> n/a
+    step: image_policy
+    raw: { existing: null, key_exists: false, key_data: "" }
+    expect: { action: none, blocking: false, status: { ClusterImagePolicy: n/a } }
+
+  - name: ClusterImagePolicy on 4.20 with a key -> create
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: create, blocking: false, status: { OpenShift version: ok, ROSA HCP: warn } }
+
+  - name: ClusterImagePolicy on 4.19 -> fail unless Tech Preview is allowed
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    facts: { _sg_versions: { version: "4.19.20" } }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { OpenShift version: fail } }
+
+  - name: ClusterImagePolicy on 4.19 with the Tech Preview override
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub, serveguard_allow_cip_tech_preview: true }
+    facts: { _sg_versions: { version: "4.19.20" } }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: create, blocking: false, status: { OpenShift version: override } }
+
+  - name: ClusterImagePolicy with keyless -> not implemented (PublicKey only)
+    step: image_policy
+    workload: { signing_mode: keyless }
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { root of trust: fail } }
+
+  - name: an existing ClusterImagePolicy with another spec -> conflict
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: { spec: { scopes: [quay.io/other] } }, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { serveguard-receiver: conflict } }
+
+  - name: internal registry -> referrers unverified, tag-schema fallback
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: null, referrers: null } }
+    expect: { blocking: false, status: { OCI referrers: ok }, detail: ["tag-schema fallback"] }
+
+  - name: Quay 3.13 with referrers
+    step: registry
+    workload: { registry: quay.example.com }
+    vars: { serveguard_quay: { namespace: quay, name: registry } }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: "{{ fx['quay-ok'] }}", referrers: true } }
+    expect: { blocking: false, status: { Quay version: ok, Quay referrers API: ok } }
+
+  - name: Quay 3.11 without referrers -> fail
+    step: registry
+    workload: { registry: quay.example.com }
+    vars: { serveguard_quay: { namespace: quay, name: registry } }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: "{{ fx['quay-old'] }}", referrers: false } }
+    expect: { blocking: true, status: { Quay version: fail, Quay referrers API: fail } }
+
+  - name: external registry not checked -> warn
+    step: registry
+    workload: { registry: registry.example.com, receiver_image: quay.io/me/r:1 }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null, quay: { registry: null, referrers: null } }
+    expect: { blocking: false, status: { OCI referrers: warn, internal registry: n/a } }
+
+  - name: internal registry Removed while it holds the adapters -> fail even with an external receiver image
+    step: registry
+    workload: { receiver_image: quay.io/me/r:1 }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null, quay: { registry: null, referrers: null } }
+    expect: { blocking: true, status: { managementState: fail } }
+
+  - name: attestation namespace pods are not counted as used
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-attestations'] }}" }
+    expect: { blocking: false, status: { "predictor + story Job": ok } }
+
+  - name: the same pods in another namespace do count
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-attestations'] | map('combine', {'metadata': {'namespace': 'other'}}) | list }}" }
+    expect: { blocking: true, status: { "predictor + story Job": fail } }
+
+  - name: pending ADR-0001 variables fall back to the announced defaults (WARN)
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
+      overrides: {}
+    expect: { blocking: false, status: { serveguard_signing_mode: warn, serveguard_enforcer: warn }, detail: ["keypair (ADR-0001 default"],
+              workload: { signing_mode: keypair, enforcer: vap, attestation_namespace: sg-attestations, supply_chain: false } }
+
   # ---- cluster -------------------------------------------------------------------------
   - name: cluster absent -> create at the chosen version
     step: cluster
@@ -457,9 +689,9 @@ cases:
     raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
     expect: { blocking: true, status: { managementState: fail } }
 
-  - name: registry not needed with an external receiver image
+  - name: internal registry not needed with an external receiver image and adapter registry
     step: registry
-    workload: { receiver_image: "quay.io/me/serveguard-receiver:1" }
+    workload: { receiver_image: "quay.io/me/serveguard-receiver:1", registry: registry.example.com }
     raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
     expect: { blocking: false, status: { "internal registry": n/a } }
 

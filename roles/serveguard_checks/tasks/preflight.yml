@@ -20,8 +20,16 @@
   ansible.builtin.include_tasks: pre_pool.yml
 - name: Quotas and instance types
   ansible.builtin.include_tasks: pre_quota.yml
+- name: Signing mode and enforcer
+  ansible.builtin.include_tasks: pre_signing.yml
+- name: Kyverno (enforcer kyverno)
+  ansible.builtin.include_tasks: pre_kyverno.yml
 - name: Operators
   ansible.builtin.include_tasks: pre_operators.yml
+- name: RHTAS (keyless)
+  ansible.builtin.include_tasks: pre_rhtas.yml
+- name: ClusterImagePolicy (opt-in)
+  ansible.builtin.include_tasks: pre_image_policy.yml
 - name: GPU stack
   ansible.builtin.include_tasks: pre_gpu_stack.yml
   when: serveguard_accelerator == 'nvidia'

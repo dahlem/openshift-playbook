@@ -33,6 +33,15 @@ operators:
     channel: stable-v1
     source: redhat-operators
     package: openshift-cert-manager-operator
+  # ServeGuard supply-chain attestation (ADR-0001), selected by mode, never by default:
+  rhtas:                 # keyless signing: Red Hat Trusted Artifact Signer 1.3.x
+    channel: stable
+    source: redhat-operators
+    package: rhtas-operator
+  kyverno:               # enforcer kyverno: Nirmata Enterprise for Kyverno (Red Hat Marketplace)
+    channel: stable      # UNVERIFIED package/channel/source: the preflight checks them
+    source: redhat-marketplace  # against the catalog and lists what is offered
+    package: nirmata-kyverno-operator
 
 infrastructure:
   gpu_instance_type: g6.xlarge
@@ -78,6 +87,12 @@ serveguard:
     # (make, uv and the workload's own tools are checked by serveguard.openshift_ai.preflight.)
     cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", ocm: null }
     python_modules: [kubernetes, jmespath]
+    # Supply-chain attestation prerequisites (ADR-0001 §5.4)
+    kyverno_min: "1.12.0"
+    rhtas_minor: "1.3"
+    rhtas_openshift: { min: "4.16.0", max_exclusive: "4.22" }   # RHTAS 1.3.6: OCP 4.16-4.21
+    quay_min: "3.12.0"                                          # OCI 1.1 referrers (FEATURE_REFERRERS_API)
+    cluster_image_policy_ga: "4.20.0"                           # ClusterImagePolicy GA (TP in 4.19)
     # EC2 vCPU quota codes per instance family (Running On-Demand instances).
     quota_codes:
       standard: L-1216C47A   # A, C, D, H, I, M, R, T, Z

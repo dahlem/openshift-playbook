@@ -18,15 +18,22 @@
     _sg_story_failures: >-
       {{ serveguard_stories_result | sg_story_failures }}
 
-- name: ServeGuard story summary
-  ansible.builtin.debug:
-    msg: >-
+- name: Build the story summary
+  ansible.builtin.set_fact:
+    _sg_banner: >-
       {{ ['', '=' * 60,
           '  ServeGuard on OpenShift AI: ' ~ ('all stories as expected' if not _sg_story_failures
                                                else (_sg_story_failures | length | string) ~ ' story(ies) NOT as expected'),
           '=' * 60, '']
          + (serveguard_stories_result | map('sg_story_lines') | flatten)
+         + ([''] + ['  adapter:      ' ~ serveguard_adapter_ref] if serveguard_adapter_ref is defined else [])
+         + (['  VSA:          ' ~ serveguard_vsa.digest ~ ' (' ~ serveguard_vsa.result ~ ')'] if serveguard_vsa is defined else [])
+         + (['  trust anchor: ' ~ serveguard_anchor_bundle_digest] if serveguard_anchor_bundle_digest is defined else [])
          + ['', '=' * 60, ''] }}
+
+- name: ServeGuard story summary
+  ansible.builtin.debug:
+    msg: "{{ _sg_banner }}"
 
 - name: Fail when a story did not behave as expected
   ansible.builtin.fail:

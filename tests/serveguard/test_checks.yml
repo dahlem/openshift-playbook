@@ -44,10 +44,26 @@
       storage_class: ""
       store_access_mode: ReadWriteOnce
       logrows: 19
+      supply_chain: true
+      signing_mode: keypair
+      signing_keys_dir: /home/demo/.cache/serveguard-openshift-ai/keys
+      enforcer: vap
+      registry: image-registry.openshift-image-registry.svc:5000
+      attestation_namespace: sg-attestations
+      rhtas_namespace: trusted-artifact-signer
+      rhtas_trust_config: ""
+      rhtas_oidc_issuer: ""
+      fulcio_audience: sigstore
     # Variables a case may override; reset to these before each case.
     _test_defaults:
       serveguard_openshift_range: guide
       serveguard_srs_sha256: ""
+      serveguard_allow_existing_kyverno: false
+      serveguard_allow_securesign_update: false
+      serveguard_cluster_image_policy: false
+      serveguard_receiver_image_public_key: ""
+      serveguard_allow_cip_tech_preview: false
+      serveguard_quay: {}
       serveguard_allow_cluster_version: false
       serveguard_allow_pool_mismatch: false
       serveguard_allow_channel_change: false

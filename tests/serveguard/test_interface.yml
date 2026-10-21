@@ -42,7 +42,12 @@
           - _sg_workload.verifier_namespace == 'sg-verifier'
         fail_msg: "unmapped (not in the collection): {{ _unmapped }}"
       vars:
-        _unmapped: "{{ serveguard_workload_vars.values() | reject('in', _real_defaults) | list }}"
+        # Before ADR-0001 is merged the collection lacks the supply-chain variables;
+        # they are allowed missing only then (pre_workload uses the announced defaults).
+        _unmapped: >-
+          {{ serveguard_workload_vars.values() | reject('in', _real_defaults)
+             | reject('in', [] if 'serveguard_signing_mode' in _real_defaults else serveguard_workload_fallbacks)
+             | list }}
 
     - name: Every mapped value equals the real default (or the -e override, which wins)
       ansible.builtin.assert:
@@ -52,7 +57,7 @@
            else (_real_defaults[item.value] | string))
         fail_msg: "{{ item.key }}: {{ _sg_workload[item.key] }} != {{ _real_defaults[item.value] }}"
         quiet: true
-      loop: "{{ serveguard_workload_vars | dict2items }}"
+      loop: "{{ serveguard_workload_vars | dict2items | selectattr('value', 'in', _real_defaults) | list }}"
       loop_control:
         label: "{{ item.value }}"
 

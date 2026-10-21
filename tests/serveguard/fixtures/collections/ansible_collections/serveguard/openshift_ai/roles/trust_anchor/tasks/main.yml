@@ -2,3 +2,8 @@
 - name: "stub trust_anchor main: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['trust_anchor'] }}"
+
+- name: "stub trust_anchor: supply-chain fact (ADR-0001)"
+  ansible.builtin.set_fact:
+    serveguard_anchor_bundle_digest: "{{ stub_anchor_digest | default('sha256:' ~ 'a' * 64) }}"
+  when: stub_supply_chain | default(false) | bool

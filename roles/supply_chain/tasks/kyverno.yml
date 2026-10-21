@@ -1,0 +1,46 @@
+---
+# Kyverno for serveguard_enforcer: kyverno. Precondition (serveguard_checks
+# pre_kyverno): the operator Subscription exists (operators role) and no foreign
+# Kyverno conflicts. Postcondition: clusterpolicies.kyverno.io present and an
+# admission controller ready at >= the required version.
+
+- name: Create the Kyverno instance for the operator
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ serveguard_kyverno_instance }}"
+  when: serveguard_kyverno_instance | length > 0
+
+- name: "post kyverno: wait for Kyverno"
+  block:
+    - name: Wait for the Kyverno CRD
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: clusterpolicies.kyverno.io
+      register: _sc_kv_crd
+      until: _sc_kv_crd.resources | length > 0
+      retries: "{{ (serveguard_supply_chain_wait | int / 15) | int }}"
+      delay: 15
+
+    - name: Wait for an admission controller
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        label_selectors: ["app.kubernetes.io/component=admission-controller", "app.kubernetes.io/part-of=kyverno"]
+      register: _sc_kv_dep
+      until: _sc_kv_dep.resources | selectattr('status.readyReplicas', 'defined') | selectattr('status.readyReplicas', 'ge', 1) | list | length > 0
+      retries: "{{ (serveguard_supply_chain_wait | int / 15) | int }}"
+      delay: 15
+  rescue:
+    - name: Diagnose Kyverno
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: _diagnose.yml
+      vars:
+        _sg_diag_title: >-
+          Kyverno not ready within {{ serveguard_supply_chain_wait }}s{{ '' if serveguard_kyverno_instance | length > 0
+          else ' (no serveguard_kyverno_instance given: pass the Kyverno instance the operator documents, see docs/serveguard.md)' }}
+        _sg_diag_cmds:
+          - "oc get subscription,csv,installplan -n {{ operators_install.kyverno.subscription.namespace | default('kyverno') }} -o wide"
+          - "oc get deploy -A -l app.kubernetes.io/part-of=kyverno"
+          - "oc get pods -n kyverno"
+          - "oc get events -n kyverno --field-selector type=Warning --sort-by=.lastTimestamp"

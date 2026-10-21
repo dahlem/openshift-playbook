@@ -1,0 +1,49 @@
+---
+# Offline: roles/supply_chain/tasks/_trust_config.yml against a fixture TUF repository
+# served on localhost by run.sh (TUF_URL). Checks the ClientTrustConfig it writes, the
+# fallback signing config from component URLs, and the target-hash check (CORRUPT=1).
+- name: RHTAS ClientTrustConfig export (offline, localhost TUF fixture)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    serveguard_rhtas_validate_certs: false
+    serveguard_rhtas_trust_config_export: "{{ lookup('env', 'TRUST_OUT') }}"
+    _sc_urls:
+      Tuf: "{{ lookup('env', 'TUF_URL') }}"
+      Fulcio: https://fulcio.apps.example
+      Rekor: https://rekor.apps.example
+  tasks:
+    - name: Export
+      ansible.builtin.include_role:
+        name: supply_chain
+        tasks_from: _trust_config.yml
+      when: lookup('env', 'CORRUPT') != '1'
+
+    - name: The exported ClientTrustConfig
+      ansible.builtin.set_fact:
+        _out: "{{ lookup('file', serveguard_rhtas_trust_config_export) | from_json }}"
+      when: lookup('env', 'CORRUPT') != '1'
+
+    - name: Trusted root from TUF; signing config from TUF or built from the components
+      ansible.builtin.assert:
+        that:
+          - _out.mediaType == 'application/vnd.dev.sigstore.clienttrustconfig.v0.1+json'
+          - _out.trustedRoot.tlogs[0].baseUrl == 'https://rekor.apps.example'
+          - >-
+            _out.signingConfig.caUrls[0].url == 'https://fulcio.apps.example'
+          - (lookup('env', 'WITH_SC') == '1') == ('rekorTlogUrls' not in _out.signingConfig)
+      when: lookup('env', 'CORRUPT') != '1'
+
+    - name: A target whose bytes differ from the listed hash is refused
+      when: lookup('env', 'CORRUPT') == '1'
+      block:
+        - name: Export from the corrupted repository
+          ansible.builtin.include_role:
+            name: supply_chain
+            tasks_from: _trust_config.yml
+        - name: Not reached
+          ansible.builtin.fail: { msg: "corrupted target accepted" }
+      rescue:
+        - name: Refused
+          ansible.builtin.assert:
+            that: "'does not match its listed SHA-256' in (ansible_failed_result | to_json)"

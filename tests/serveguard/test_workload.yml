@@ -78,6 +78,95 @@
               - _sg_story_failures == ['forged-verdict']
               - "'serving_consumer:serve' not in stub_calls[-1:]"
 
+    # ---- with supply-chain attestation (ADR-0001): facts asserted, banner shows them
+    - name: Supply-chain run
+      vars:
+        stub_supply_chain: true
+        _sg_workload: { supply_chain: true }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+
+        - name: Run the workload with supply-chain facts
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+
+        - name: Facts asserted and the digest-pinned adapter ref remembered
+          ansible.builtin.assert:
+            that:
+              - _sg_admitted_digest is match('^oci://.+@sha256:[0-9a-f]{64}$')
+              - stub_calls == _demo_order
+
+    - name: A VSA that did not pass fails right after admit
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { digest: "sha256:{{ 'f' * 64 }}", result: FAILED } }
+      block:
+        - name: Run with a FAILED VSA
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "FAILED VSA was not caught" }
+      rescue:
+        - name: The admit assertion fired before serving
+          ansible.builtin.assert:
+            that:
+              - "'admit: supply-chain facts' in ansible_failed_result.msg"
+              - stub_calls[-1] == 'public_verifier:admit'
+
+    - name: A tag-addressed adapter ref fails right after the publisher
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_adapter_ref: "oci://registry/sg-publisher/serveguard-adapter:latest" }
+      block:
+        - name: Run with a tag reference
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "tag ref was not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: supply-chain facts' in ansible_failed_result.msg"
+
+    - name: Missing attestation digests fail after the publisher
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_attestations: { confinement: "sha256:{{ 'c' * 64 }}" } }
+      block:
+        - name: Run with one attestation only
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "missing attestations were not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: supply-chain facts' in ansible_failed_result.msg"
+
+    - name: A malformed trust-anchor digest fails after trust_anchor
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_anchor_digest: "not-a-digest" }
+      block:
+        - name: Run with a bad anchor digest
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "bad anchor digest was not caught" }
+      rescue:
+        - name: The trust-anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: supply-chain facts' in ansible_failed_result.msg"
+
+    - name: Banner shows the adapter ref, VSA and anchor
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: stories_banner }
+      vars:
+        serveguard_stories_result: [{ story: query, expected: served, verdict: served, reason: "", as_expected: true }]
+        serveguard_adapter_ref: "oci://r/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}"
+        serveguard_vsa: { digest: "sha256:{{ 'f' * 64 }}", result: PASSED }
+        serveguard_anchor_bundle_digest: "sha256:{{ 'a' * 64 }}"
+
+    - name: The banner lines
+      ansible.builtin.assert:
+        that:
+          - _adapter_lines | length == 1
+          - _vsa_lines | length == 1
+          - _anchor_lines | length == 1
+        fail_msg: "{{ _sg_banner | to_json }}"
+      vars:
+        _adapter_lines: "{{ _sg_banner | select('match', '^  adapter: +oci://r/sg-publisher/serveguard-adapter@sha256:b{64}$') | list }}"
+        _vsa_lines: "{{ _sg_banner | select('match', '^  VSA: +sha256:f{64} [(]PASSED[)]$') | list }}"
+        _anchor_lines: "{{ _sg_banner | select('match', '^  trust anchor: sha256:a{64}$') | list }}"
+
     - name: Teardown resolves
       ansible.builtin.include_role:
         name: serveguard.openshift_ai.teardown

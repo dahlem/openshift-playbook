@@ -64,11 +64,13 @@
           - operators_apply_channel_change is not defined
           - rosa_openshift_version is not defined
           - versions.cluster.openshift_version == '4.21.3'
+          # Supply-chain operators exist in the catalogue but are never enabled by default.
+          - "'rhtas' not in operators_enabled and 'kyverno' not in operators_enabled"
 
     - name: No Mistral/Knative scenario or playbook sets a ServeGuard hook
       ansible.builtin.command:
         cmd: >-
-          grep -rlE 'operators_subset|operators_existing_operator_groups|operators_apply_channel_change|ai_platform_mode|operators_enabled|rosa_openshift_version'
+          grep -rlE 'operators_subset|operators_existing_operator_groups|operators_apply_channel_change|ai_platform_mode|operators_enabled|rosa_openshift_version|serveguard_signing_mode|serveguard_enforcer|supply_chain'
           scenarios/mistral-7b scenarios/mistral-small-24b scenarios/llama-3-70b scenarios/deepseek-r1-70b
           playbooks/llm-endpoint.yml playbooks/llm-endpoint-on-cluster.yml playbooks/llm-endpoint-teardown.yml
           playbooks/llm-endpoint-llmd.yml playbooks/llm-endpoint-llmd-teardown.yml playbooks/step-operators.yml playbooks/step-ai-platform.yml

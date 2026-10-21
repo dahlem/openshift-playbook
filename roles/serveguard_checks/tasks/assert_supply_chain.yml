@@ -1,0 +1,38 @@
+---
+# Supply-chain facts the collection sets (ADR-0001 §5.4), asserted after the role
+# that sets them. Input: _sg_stage = trust_anchor | publisher | admit. Skipped (with
+# a note) when the installed collection predates supply-chain attestation.
+
+- name: Collection without supply-chain attestation
+  ansible.builtin.debug:
+    msg: "serveguard.openshift_ai does not declare serveguard_signing_mode: no {{ _sg_stage }} supply-chain facts to assert."
+  when: not (_sg_workload.supply_chain | default(false) | bool)
+
+- name: "Assert supply-chain facts: {{ _sg_stage }}"
+  when: _sg_workload.supply_chain | default(false) | bool
+  ansible.builtin.assert:
+    that: "{{ _sg_checks_by_stage[_sg_stage] }}"
+    fail_msg: >-
+      {{ _sg_stage }}: supply-chain facts missing or malformed:
+      anchor={{ serveguard_anchor_bundle_digest | default('undefined') }},
+      adapter_ref={{ serveguard_adapter_ref | default('undefined') }},
+      attestations={{ serveguard_attestations | default('undefined') | to_json }},
+      vsa={{ serveguard_vsa | default('undefined') | to_json }}
+  vars:
+    _sg_digest: '^(sha256:)?[0-9a-f]{64}$'
+    _sg_checks_by_stage:
+      trust_anchor:
+        - serveguard_anchor_bundle_digest is defined
+        - serveguard_anchor_bundle_digest is match(_sg_digest)
+      publisher:
+        # digest-pinned: oci://<registry>/<repo>@sha256:<64 hex>, never a tag
+        - serveguard_adapter_ref is defined
+        - serveguard_adapter_ref is match('^oci://[^@\s]+@sha256:[0-9a-f]{64}$')
+        - serveguard_attestations is defined
+        - serveguard_attestations is mapping
+        - serveguard_attestations | length >= 3
+        - serveguard_attestations.values() | map('string') | reject('match', _sg_digest) | list | length == 0
+      admit:
+        - serveguard_vsa is defined
+        - serveguard_vsa.result | default('') == 'PASSED'
+        - serveguard_vsa.digest | default('') is match(_sg_digest)

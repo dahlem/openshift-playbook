@@ -1,0 +1,27 @@
+---
+# Optional ClusterImagePolicy for the receiver image's signature (GA in 4.20).
+# Precondition (pre_image_policy): version, key, no conflicting policy. It covers
+# images at CRI-O pull, never the adapter (the guard verifies the adapter's VSA).
+- name: Create the ClusterImagePolicy
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: config.openshift.io/v1
+      kind: ClusterImagePolicy
+      metadata: { name: "{{ serveguard_cip_name }}" }
+      spec: "{{ _sg_cip_spec }}"
+  when: _sg_image_policy.action == 'create'
+
+- name: "post image policy: read it back"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterImagePolicy
+    name: "{{ serveguard_cip_name }}"
+  register: _sc_cip
+
+- name: The ClusterImagePolicy holds the requested spec
+  ansible.builtin.assert:
+    that:
+      - _sc_cip.resources | length == 1
+      - _sc_cip.resources[0].spec == _sg_cip_spec
+    fail_msg: "ClusterImagePolicy {{ serveguard_cip_name }} missing or different after apply"

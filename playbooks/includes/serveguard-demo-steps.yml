@@ -67,7 +67,13 @@
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_pool }
 
 # ---- operators, GPU stack, platform -------------------------------------------------
-- name: Check the operators
+- name: Check the signing mode and enforcer (ADR-0001)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_signing }
+
+- name: Check Kyverno (enforcer kyverno only)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+
+- name: Check the operators (incl. RHTAS / Kyverno when the mode needs them)
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_operators }
 
 - name: Install the missing operators
@@ -110,7 +116,52 @@
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_platform }
 
 # ---- platform checks for the workload, then the workload ---------------------------
-- name: Check the internal image registry
+- name: Supply-chain prerequisites
+  block:
+    - name: Re-check Kyverno after the operators
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+
+    - name: Kyverno instance and readiness
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: kyverno }
+      when: _sg_kyverno.action in ['install', 'instance']
+
+    - name: Verify Kyverno
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+      when: _sg_kyverno.action != 'none'
+      vars:
+        serveguard_checks_mode: enforce
+
+    - name: Kyverno is satisfied
+      ansible.builtin.assert:
+        that: _sg_kyverno.action in ['none', 'satisfied', 'accept']
+        fail_msg: "Kyverno: {{ _sg_kyverno.rows | map(attribute='detail') | join('; ') }}"
+
+    - name: Check RHTAS (keyless only)
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_rhtas }
+
+    - name: RHTAS Securesign and trust config
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: rhtas }
+      when: _sg_rhtas.action in ['create', 'update', 'wait', 'satisfied']
+
+    - name: Verify RHTAS
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_rhtas }
+      when: _sg_rhtas.action != 'none'
+
+    - name: RHTAS is satisfied
+      ansible.builtin.assert:
+        that:
+          - _sg_rhtas.action in ['none', 'satisfied']
+          - _sg_rhtas.action == 'none' or (serveguard_rhtas_trust_config | default('')) is file
+        fail_msg: "RHTAS: {{ _sg_rhtas.rows | map(attribute='detail') | join('; ') }}"
+
+    - name: Check the ClusterImagePolicy (opt-in)
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_image_policy }
+
+    - name: Apply the ClusterImagePolicy
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: image_policy }
+      when: _sg_image_policy.action in ['create', 'satisfied']
+
+- name: Check the internal image registry (and Quay, if configured)
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_registry }
 
 - name: Check storage

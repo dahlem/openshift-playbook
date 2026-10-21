@@ -1,0 +1,16 @@
+---
+# Read-only, local: which key pairs already exist (keypair mode).
+- name: Find existing signing keys
+  ansible.builtin.find:
+    paths: "{{ _sg_workload.signing_keys_dir | default('') }}"
+    patterns: "{{ item }}*"
+  register: _sg_keys
+  loop: [operator, publisher, verifier]
+  when: (_sg_workload.signing_mode | default('keypair')) == 'keypair' and (_sg_workload.signing_keys_dir | default('')) is directory
+
+- name: Collect signing facts
+  ansible.builtin.set_fact:
+    _sg_raw_signing:
+      keys: >-
+        {{ dict(_sg_keys.results | default([]) | map(attribute='item')
+                | zip(_sg_keys.results | default([]) | map(attribute='files', default=[]) | map('map', attribute='path') | map('list'))) }}

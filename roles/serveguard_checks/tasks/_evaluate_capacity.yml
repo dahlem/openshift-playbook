@@ -11,7 +11,8 @@
       {{ _sg_raw_capacity | sg_eval_capacity({
            'namespaces': [_sg_workload.namespace | default('serveguard-demo'),
                           _sg_workload.publisher_namespace | default('sg-publisher'),
-                          _sg_workload.verifier_namespace | default('sg-verifier')],
+                          _sg_workload.verifier_namespace | default('sg-verifier'),
+                          _sg_workload.attestation_namespace | default('sg-attestations')],
            'pool_pending': (_sg_pool.action | default('satisfied')) in ['create', 'wait'],
            'demands': _sg_workload | sg_workload_demands(serveguard_accelerator, serveguard_min_node_ephemeral) }) }}
   when: _sg_workload.predictor_cpu is defined and _sg_workload.predictor_memory is defined

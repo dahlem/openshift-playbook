@@ -23,4 +23,10 @@
            'sub_name': operators_install[item].subscription.name,
            'og_spec': operators_install[item].operator_group | default(none),
            'allow_channel_change': serveguard_allow_channel_change | bool }] }}
-  loop: "{{ operators_enabled }}"
+  loop: "{{ operators_enabled + _sg_supply_chain_operators }}"
+  vars:
+    # Mode-selected supply-chain prerequisites (ADR-0001): never part of a scenario's list.
+    _sg_supply_chain_operators: >-
+      {{ (['rhtas'] if (_sg_workload.signing_mode | default('keypair')) == 'keyless' else [])
+         + (['kyverno'] if ((_sg_workload.enforcer | default('vap')) == 'kyverno'
+                           and (_sg_kyverno.action | default('install')) != 'accept') else []) }}

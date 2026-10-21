@@ -332,7 +332,8 @@ ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard
 
 Pass the scenario you deployed: it selects which operators and which pool to
 remove. The teardown runs `serveguard.openshift_ai.teardown` (the workload,
-including the cluster-scoped policy and binding). It then deletes the DSC and DSCI, the operator subscriptions
+including the cluster-scoped policy and binding), then checks that `serveguard-demo`,
+`sg-publisher`, `sg-verifier` and `sg-attestations` and the policy are gone. It then deletes the DSC and DSCI, the operator subscriptions
 and CSVs, and the serving pool. CRDs are left in place. To remove the one-time
 account resources afterwards, delete the network stack (`rosa create network`
 printed its CloudFormation stack name), the OIDC config (`rosa delete oidc-config`)
@@ -379,13 +380,17 @@ fixed. The deploy stops at the first blocking row. The preflight reports all row
 | internal registry | not `Managed`, no storage, no ready `image-registry` (n/a when the collection's `serveguard_image` names an external image) | - | - |
 | StorageClass | no default (or the named `serveguard_storage_class`) StorageClass; no dynamic provisioner; the collection's `serveguard_store_access_mode` is ReadWriteMany on EBS | - | - |
 | quotas: node sizes | the serving type cannot hold predictor + a co-located Job, or no node type (worker or serving) can hold each of build, tools, approve, publish, admit (vCPU/memory minus `serveguard_node_overhead`) | - | - |
-| capacity | no Ready, untainted, schedulable node has free requests (allocatable minus running pods, init containers counted; pods of the three trust-domain namespaces not counted) for each workload read from the collection: receiver build, tools Job, approve and publish (+ `serveguard_work_size` ephemeral), admit, the predictor (+ guard init, + 1 GPU for nvidia, `serveguard_min_node_ephemeral` 30Gi), and predictor + a co-located story Job. Reported `N/A` while the serving pool is still to be created | - | - |
+| signing | mode not `keypair`/`keyless`, enforcer not `vap`/`kyverno`; keypair: a partial key set (`CONFLICT`); keyless: OpenShift outside RHTAS's 4.16–4.21 | - | - |
+| Kyverno / RHTAS / ClusterImagePolicy | see [Supply-chain attestation](#supply-chain-attestation) | prerequisite already as required | see there |
+| capacity | no Ready, untainted, schedulable node has free requests (allocatable minus running pods, init containers counted; pods of the trust-domain and attestation namespaces not counted) for each workload read from the collection: receiver build, tools Job, approve and publish (+ `serveguard_work_size` ephemeral), admit, the predictor (+ guard init, + 1 GPU for nvidia, `serveguard_min_node_ephemeral` 30Gi), and predictor + a co-located story Job. Reported `N/A` while the serving pool is still to be created | - | - |
 | workload | the collection's roles (`preflight` ... `stories`) | the collection's roles | the collection's roles; then every story's verdict equals its expected verdict (banner) |
 
 The decisions are in `roles/serveguard_checks/filter_plugins/serveguard_checks.py`,
 as pure functions of what was read. `tests/serveguard/run.sh` runs them offline
-on fixture JSON: 74 decision cases and 3 whole-account worlds through the
-preflight sequence. It also runs the Mistral identity check and the interface
+on fixture JSON: 109 decision cases and 4 whole-account worlds (including keyless
++ kyverno) through the preflight sequence. It also runs the RHTAS trust-config
+export against a fixture TUF repository on localhost, three times: plain, with a
+signing config, and corrupted. It also runs the Mistral identity check and the interface
 test against the real collection (`../serveguard`; skipped if absent), twice: with
 the defaults, and with a `serveguard_predictor_cpu=6` override, which the
 pool-sizing check correctly rejects. Last, it runs the workload's failure paths
@@ -427,6 +432,123 @@ Get the file through your organisation's approved channel. Compute and compare
 the digest yourself (`shasum -a 256 ~/.ezkl/srs/kzg19.srs`) against the value you
 were given. The preflight's `srs` row fails if the path is unset or missing, or if
 the digest differs. The collection repeats the check before copying.
+
+## Supply-chain attestation
+
+The collection carries ServeGuard's results as standard supply-chain attestations
+(serveguard ADR-0001, `docs/architecture/ADR-0001-supply-chain-attestation.md`;
+not merged yet). The adapter is an OCI artifact, pulled by digest. The publisher
+attaches signed attestations to it: OpenSSF Model Signing, SLSA provenance and a
+ServeGuard confinement statement. The public verifier signs a SLSA Verification
+Summary Attestation (VSA) after the zero-knowledge base certificate verifies. The
+guard init-container verifies that VSA itself before vLLM starts. This repository
+installs or checks the cluster prerequisites; the collection does the signing.
+
+### Modes
+
+| Mode | How to select it | Signing | Admission | Extra cluster prerequisites |
+|------|------------------|---------|-----------|------------------------------|
+| keypair + vap (default) | nothing | P-256 key pairs on the controller (`serveguard_signing_keys_dir`), one each for operator, publisher and verifier; no transparency log | VAP (digest-pinned adapter reference, writer = verifier SA); the guard verifies the VSA | none |
+| keyless + vap | `-e @scenarios/serveguard/keyless.yml` | each trust domain signs as its service account through RHTAS (Fulcio `kubernetes` issuer); entries in RHTAS's Rekor | as above | RHTAS operator 1.3.x + `Securesign` |
+| keyless + kyverno | `-e @scenarios/serveguard/keyless-kyverno.yml` | as keyless | as above, plus a Kyverno `ClusterPolicy` that refuses an `InferenceService` whose adapter has no verifier-signed VSA (`PASSED`, policy digest = trust-anchor digest) | RHTAS + Kyverno >= 1.12 |
+
+Put the mode file **after** `cpu.yml` or `gpu.yml`. The mode variables
+(`serveguard_signing_mode`, `serveguard_enforcer`) are the collection's. This
+repository reads them like every other workload variable and adds the matching
+operators to the install list. They are never part of a scenario's
+`operators_enabled`.
+
+What each mode proves (given its signer is trusted; ADR-0001 §8):
+
+- **Every mode:**
+  - the VSA says the verifier ran `verify_base_certificate` and the claim checks
+    for this exact digest under this trust anchor;
+  - the guard shows the loaded bytes open the commitment and satisfy
+    `A = C·M_dep` with the caps;
+  - the attestations sit in a separate repository in `sg-attestations`;
+  - none of this covers runtime execution after load, or model behaviour.
+- **Keypair:** trust rests on the controller's key files. The signatures carry no
+  transparency-log entry, so a verifier must be told to skip the log.
+- **Keyless:** each signature is bound to a service-account identity and logged in
+  the cluster's own Rekor. The public-good Sigstore instance is never used.
+- **Kyverno:** the API server also refuses an unattested adapter. Without it, such
+  an `InferenceService` is created, but its predictor never starts, because the
+  guard refuses.
+
+### Prerequisites the playbook installs or checks
+
+| # | Prerequisite | When | Pre (preflight row) | Install | Post |
+|---|--------------|------|---------------------|---------|------|
+| 1 | Registry | always | internal registry `Managed` with storage and a ready deployment, also when only the adapter (not the receiver image) uses it; the internal registry's OCI referrers support is unverified, so the collection uses the tag-schema fallback (`OK`); an external registry is `WARN` unless it is Quay. Optional Red Hat Quay: set `serveguard_quay: {namespace, name}`; requires QuayRegistry `currentVersion` >= 3.12 and `FEATURE_REFERRERS_API: true` in its config bundle (read without logging it). Quay is never installed | - | - |
+| 2 | Kyverno >= 1.12 | `serveguard_enforcer: kyverno` | `clusterpolicies.kyverno.io` from a Kyverno this playbook did not subscribe (for example Helm) is a `CONFLICT` unless `serveguard_allow_existing_kyverno=true`; version from the admission-controller image; catalog package and channel (`versions.yml` `operators.kyverno`) | OLM Subscription to Nirmata Enterprise for Kyverno (Red Hat Marketplace), then `serveguard_kyverno_instance` if given | CRD present, admission controller ready (bounded; diagnostics) |
+| 3 | RHTAS 1.3.x | `serveguard_signing_mode: keyless` | OpenShift in 4.16 <= v < 4.22 (RHTAS 1.3.6 supports 4.16–4.21, so `serveguard_openshift_range=article` with 4.22 fails); service-account issuer from `authentication.config.openshift.io/cluster` `spec.serviceAccountIssuer` (on ROSA HCP the cluster's OIDC config URL), or `serveguard_rhtas_oidc_issuer`; an existing `Securesign` that does not trust that issuer with `Type: kubernetes` is a `CONFLICT` unless `serveguard_allow_securesign_update=true` (adds it, keeps the others) | OLM Subscription `rhtas-operator`, then `Securesign` `securesign` in `trusted-artifact-signer` with Fulcio (issuer `Type: kubernetes`, client ID `serveguard_fulcio_audience`), Rekor, CTlog, Trillian and TUF | each component `Ready` (bounded; diagnostics); the Sigstore `ClientTrustConfig` exported to `serveguard_rhtas_trust_config_export` and passed to the collection as `serveguard_rhtas_trust_config`, with the issuer as `serveguard_rhtas_oidc_issuer` |
+| 4 | ClusterImagePolicy for the receiver image | `serveguard_cluster_image_policy: true` | OpenShift >= 4.20 (GA), or 4.19 with `serveguard_allow_cip_tech_preview=true`; `serveguard_receiver_image_public_key` present; an existing policy of the same name with another spec is a `CONFLICT`; `WARN`: support on ROSA HCP node pools is unverified; keyless roots (`FulcioCAWithRekor`) are not implemented here | `ClusterImagePolicy` `serveguard-receiver` (`PublicKey`, scope = the receiver image repository) | read back with the same spec |
+
+The keypair mode needs a writable `serveguard_signing_keys_dir`. The collection
+generates the three key pairs there. The preflight reuses a complete set and
+reports a partial one as a `CONFLICT`, because a partial set would pin mismatched
+identities.
+
+**Exporting the trust config.** The playbook walks RHTAS's TUF repository:
+`timestamp.json`, then `<n>.snapshot.json`, then `<m>.targets.json`. It fetches
+`trusted_root.json` (and `signing_config.v0.2.json` if served) and requires each
+file's SHA-256 to equal the one the targets metadata lists. That checks integrity,
+not TUF signatures, so trust rests on the cluster route's TLS. If the repository
+serves no signing config, one is built from the Fulcio and Rekor URLs the
+components report. The export is refused if it names public-good `sigstore.dev`.
+
+**Kyverno instance.** The Nirmata operator's package name, channel and instance
+resource are **not verified** here. The preflight checks the package and channel
+against the cluster's catalog and lists what is offered. If the operator does not
+start Kyverno by itself, pass the instance it documents as
+`serveguard_kyverno_instance` (a full manifest). The fallback, upstream Helm, is
+not automated, because Helm is not a dependency of this repository:
+
+```bash
+helm repo add kyverno https://kyverno.github.io/kyverno/
+helm install kyverno kyverno/kyverno -n kyverno --create-namespace --version <chart for Kyverno >= 1.12>
+# then deploy with -e serveguard_allow_existing_kyverno=true
+```
+
+### Facts asserted after each role
+
+| After | Fact | Must hold |
+|-------|------|-----------|
+| `trust_anchor` | `serveguard_anchor_bundle_digest` | a SHA-256 digest (the DSSE-signed trust-anchor bundle) |
+| `publisher` | `serveguard_adapter_ref` | `oci://<registry>/<repo>@sha256:<64 hex>`: digest-pinned, never a tag |
+| `publisher` | `serveguard_attestations` | at least three digests (confinement, OMS, provenance) |
+| `public_verifier` admit | `serveguard_vsa` | `result: PASSED`, `digest` a SHA-256 |
+| `serving_consumer` serve (twice) | `serveguard_serving_result` | ready, guard exit code 0, the same adapter reference after the stories |
+
+With the supply-chain collection, the `serveguard.io/admitted` and digest
+annotations are gone. The VSA and the guard carry the verdict. A collection that
+predates ADR-0001 is detected (it does not declare `serveguard_signing_mode`). For
+it, these assertions are skipped with a note, and the annotation checks apply. The
+story banner adds the adapter reference, the VSA digest and result, and the
+trust-anchor digest.
+
+### Inspecting the VSA
+
+The VSA is a Sigstore bundle attached as an OCI referrer of the adapter digest in
+the attestation repository (predicate `https://slsa.dev/verification_summary/v1`):
+
+```bash
+REF=$(…serveguard_adapter_ref without oci://…)     # registry/sg-publisher/serveguard-adapter@sha256:…
+oras discover "$REF"                                     # lists the attached bundles (referrers or sha256-<hex> tag)
+# keypair mode (no transparency log):
+cosign verify-attestation --key verifier.pub --insecure-ignore-tlog \
+  --type https://slsa.dev/verification_summary/v1 "$REF" | jq -r .payload | base64 -d | jq .predicate
+# keyless mode (RHTAS):
+cosign verify-attestation --trusted-root <exported trust config's trustedRoot> \
+  --certificate-identity https://kubernetes.io/namespaces/sg-verifier/serviceaccounts/<verifier SA> \
+  --certificate-oidc-issuer "$(oc get authentication cluster -o jsonpath='{.spec.serviceAccountIssuer}')" \
+  --type https://slsa.dev/verification_summary/v1 "$REF"
+```
+
+Check `verificationResult: PASSED`, `policy.digest.sha256` (the trust-anchor
+digest from the banner), `verifiedLevels` containing `SERVEGUARD_CONFINEMENT_V1`,
+and `resourceUri` equal to the adapter reference. The registry needs pull access
+to the attestation repository (`oc registry login` for the internal registry).
 
 ## Switching to RHOAI 3.6
 
@@ -474,6 +596,11 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 | `serveguard_srs_path` / `serveguard_srs_sha256` | unset (required) | the approved KZG SRS on the controller and its SHA-256 |
 | `serveguard_repo_dir` / `serveguard_cli` | sibling `../serveguard`, `uv run --project ...` | where the collection builds the receiver from, and its CLI |
 | `serveguard_allow_cluster_version` | `false` | accept a cluster outside the range |
+| `serveguard_signing_mode` / `serveguard_enforcer` | collection default `keypair` / `vap` (scenario mode files) | supply-chain mode |
+| `serveguard_quay` | `{}` | QuayRegistry to check as the registry |
+| `serveguard_kyverno_instance` / `serveguard_allow_existing_kyverno` | `{}` / `false` | Kyverno instance manifest; accept a foreign Kyverno |
+| `serveguard_allow_securesign_update` | `false` | add the cluster issuer to an existing `Securesign` |
+| `serveguard_cluster_image_policy` / `serveguard_receiver_image_public_key` / `serveguard_allow_cip_tech_preview` | `false` / `""` / `false` | receiver-image ClusterImagePolicy |
 | `serveguard_allow_pool_mismatch` | `false` | use an existing pool whose spec differs, as is |
 | `serveguard_allow_channel_change` | `false` | move an existing Subscription to the requested channel |
 | `serveguard_allow_dsc_update` | `false` | change component states of an existing DSC |

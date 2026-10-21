@@ -36,6 +36,16 @@ operators_install:
     subscription: { name: openshift-cert-manager-operator, namespace: cert-manager-operator }
     crds:
       - { crd: "certmanagers.operator.openshift.io", label: "cert-manager" }
+  rhtas:                 # AllNamespaces operator in openshift-operators (its global OperatorGroup)
+    namespaces: []
+    subscription: { name: rhtas-operator, namespace: openshift-operators }
+    crds:
+      - { crd: "securesigns.rhtas.redhat.com", label: "RHTAS Securesign" }
+  kyverno:
+    namespaces: [kyverno]
+    operator_group: {}
+    subscription: { name: nirmata-kyverno-operator, namespace: kyverno }
+    crds: []             # Kyverno's own CRDs come with its instance (roles/supply_chain)
   rhoai:
     namespaces: [redhat-ods-operator]
     operator_group: {}

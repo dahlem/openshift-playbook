@@ -162,6 +162,9 @@ ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml 
 ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
 ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass  # -e teardown_cluster=true
 # RHOAI 3.6 once GA: add -e rhoai_channel=stable-3.6 after the scenario file
+# Supply-chain attestation mode (default keypair + vap needs nothing extra):
+#   -e @scenarios/serveguard/keyless.yml           # RHTAS keyless signing
+#   -e @scenarios/serveguard/keyless-kyverno.yml   # + Kyverno VSA enforcement at admission
 ```
 
 Every step checks its preconditions first. A step whose end state already holds
@@ -369,6 +372,7 @@ model
 | `pull_secret` | Registry credentials in target namespace |
 | `model` | ServingRuntime + InferenceService, wait for Ready |
 | `llm_d` | Disaggregated prefill/decode via Helm (llm-d) |
+| `supply_chain` | ServeGuard supply-chain prerequisites: Kyverno instance, RHTAS Securesign + trust config, receiver ClusterImagePolicy |
 | `serveguard_checks` | ServeGuard platform pre/postconditions, skip/conflict decisions, resource checks (workload requests read from `serveguard.openshift_ai`), preflight table, story banner |
 
 ## Design

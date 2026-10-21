@@ -734,11 +734,219 @@ def sg_eval_platform(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
     return {"rows": rows, "action": "none" if _blocking(rows) else action}
 
 
+# ---- supply-chain attestation (ADR-0001) -------------------------------------------------
+
+SIGNING_ROLES = ("operator", "publisher", "verifier")
+
+
+def sg_eval_signing(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: keys {role: [files]} found in signing_keys_dir.
+    req: mode, enforcer, keys_dir, openshift_version (cluster's or the one to create),
+    rhtas_min, rhtas_max_exclusive."""
+    step = "signing"
+    rows = []
+    mode, enforcer = req.get("mode"), req.get("enforcer")
+    if mode not in ("keypair", "keyless"):
+        rows.append(_row(step, "signing mode", "fail", f"serveguard_signing_mode {mode!r}: keypair or keyless"))
+    if enforcer not in ("vap", "kyverno"):
+        rows.append(_row(step, "enforcer", "fail", f"serveguard_enforcer {enforcer!r}: vap or kyverno"))
+    if _blocking(rows):
+        return {"rows": rows, "action": "none"}
+    rows.append(_row(step, "mode", "ok", f"{mode} signing, {enforcer} enforcement"
+                     + ("; the guard verifies the VSA, the VAP is the first gate" if enforcer == "vap"
+                        else "; Kyverno also requires the VSA at admission")))
+    if mode == "keypair":
+        keys = raw.get("keys") or {}
+        present = [r for r in SIGNING_ROLES if keys.get(r)]
+        if not present:
+            rows.append(_row(step, "key pairs", "todo", f"the collection generates operator/publisher/verifier keys in {req.get('keys_dir')}"))
+        elif len(present) < len(SIGNING_ROLES):
+            missing = [r for r in SIGNING_ROLES if r not in present]
+            rows.append(_row(step, "key pairs", "conflict",
+                             f"only {', '.join(present)} in {req.get('keys_dir')}; missing {', '.join(missing)}. "
+                             "A partial set would pin mismatched identities: restore the missing keys or move the directory away"))
+        else:
+            rows.append(_row(step, "key pairs", "ok", f"reusing operator/publisher/verifier keys in {req.get('keys_dir')}"))
+    else:
+        v = req.get("openshift_version")
+        lo, hi = req["rhtas_min"], req["rhtas_max_exclusive"]
+        if not v:
+            rows.append(_row(step, "RHTAS on OpenShift", "n/a", "OpenShift version not known yet"))
+        elif version_in_range(v, lo, hi):
+            rows.append(_row(step, "RHTAS on OpenShift", "ok", f"{v} in {lo} <= v < {hi} (RHTAS 1.3)"))
+        else:
+            rows.append(_row(step, "RHTAS on OpenShift", "fail",
+                             f"OpenShift {v} outside {lo} <= v < {hi} that RHTAS 1.3 supports; use keypair mode or another version"))
+    return {"rows": rows, "action": "none"}
+
+
+def _image_version(deployments: list[dict[str, Any]]) -> str | None:
+    for d in deployments or []:
+        for c in ((d.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or []:
+            m = re.search(r":v?(\d+\.\d+\.\d+)", c.get("image", ""))
+            if m:
+                return m.group(1)
+    return None
+
+
+def sg_eval_kyverno(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: cluster_reachable, crd, subscription (ours)|None, deployments [admission controller].
+    req: enforcer, min, allow_existing."""
+    step = "kyverno"
+    if req.get("enforcer") != "kyverno":
+        return {"rows": [_row(step, "Kyverno", "n/a", "serveguard_enforcer is vap; not needed")], "action": "none"}
+    if not raw.get("cluster_reachable"):
+        return {"rows": [_row(step, "Kyverno", "n/a", "cluster not reachable yet")], "action": "install"}
+    deps = raw.get("deployments") or []
+    ready = any(int((d.get("status") or {}).get("readyReplicas") or 0) >= 1 for d in deps)
+    version = _image_version(deps)
+    ours = raw.get("subscription") is not None
+    rows = []
+    if raw.get("crd") and not ours:
+        where = ", ".join(sorted({(d.get("metadata") or {}).get("namespace", "?") for d in deps})) or "unknown namespace"
+        if not req.get("allow_existing"):
+            return {"rows": [_row(step, "existing Kyverno", "conflict",
+                                  f"Kyverno CRDs exist but not from this playbook's subscription (admission controller in {where}). "
+                                  "Remove it, or set serveguard_allow_existing_kyverno=true to use it")], "action": "none"}
+        rows.append(_row(step, "existing Kyverno", "override", f"using the Kyverno in {where} (serveguard_allow_existing_kyverno)"))
+    if raw.get("crd"):
+        if version is None:
+            rows.append(_row(step, "version", "warn", "admission controller image has no readable version tag"))
+        elif not version_at_least(version, req["min"]):
+            rows.append(_row(step, "version", "fail", f"Kyverno {version} < {req['min']} (verifyImages attestations, imageExtractors)"))
+        else:
+            rows.append(_row(step, "version", "ok", f"{version} >= {req['min']}"))
+        if ready and not _blocking(rows):
+            rows.append(_row(step, "admission controller", "satisfied", "ready"))
+            return {"rows": rows, "action": "accept" if not ours else "satisfied"}
+        if not ready:
+            rows.append(_row(step, "admission controller", "wait", "not ready yet"))
+        return {"rows": rows, "action": "none" if _blocking(rows) else "instance"}
+    if ours:
+        return {"rows": [_row(step, "Kyverno", "todo", "operator subscribed; its Kyverno instance is created next")], "action": "instance"}
+    return {"rows": [_row(step, "Kyverno", "todo", "will subscribe the operator and create its instance")], "action": "install"}
+
+
+RHTAS_COMPONENTS = ("Fulcio", "Rekor", "CTlog", "Trillian", "Tuf")
+
+
+def sg_eval_rhtas(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: cluster_reachable, crd, securesigns [all namespaces], components {Kind: [CR in ns]},
+    issuer (authentication.config/cluster spec.serviceAccountIssuer, may be empty).
+    req: mode, namespace, name, issuer (override), allow_update."""
+    step = "rhtas"
+    if req.get("mode") != "keyless":
+        return {"rows": [_row(step, "RHTAS", "n/a", "keypair signing; not needed")], "action": "none", "issuer": ""}
+    if not raw.get("cluster_reachable"):
+        return {"rows": [_row(step, "RHTAS", "n/a", "cluster not reachable yet")], "action": "create", "issuer": req.get("issuer", "")}
+    rows = []
+    issuer = req.get("issuer") or raw.get("issuer") or "https://kubernetes.default.svc"
+    src = "serveguard_rhtas_oidc_issuer" if req.get("issuer") else (
+        "authentication.config.openshift.io/cluster" if raw.get("issuer") else "the Kubernetes default (no serviceAccountIssuer set)")
+    status = "ok" if (req.get("issuer") or raw.get("issuer")) else "warn"
+    rows.append(_row(step, "service-account issuer", status, f"{issuer} (from {src}); Fulcio must reach its discovery document"))
+    if not raw.get("crd"):
+        rows.append(_row(step, "Securesign", "todo", "the RHTAS operator is installed first"))
+        return {"rows": rows, "action": "create", "issuer": issuer}
+    signs = raw.get("securesigns") or []
+    ours = next((x for x in signs if x["metadata"]["namespace"] == req["namespace"] and x["metadata"]["name"] == req["name"]), None)
+    for x in signs:
+        if x is not ours:
+            rows.append(_row(step, "other Securesign", "warn", f"{x['metadata']['namespace']}/{x['metadata']['name']} also exists; this demo uses its own"))
+    if ours is None:
+        rows.append(_row(step, "Securesign", "todo", f"will create {req['namespace']}/{req['name']} (Fulcio issuer type kubernetes)"))
+        return {"rows": rows, "action": "create", "issuer": issuer}
+    issuers = (((ours.get("spec") or {}).get("fulcio") or {}).get("config") or {}).get("OIDCIssuers") or []
+    has = any(i.get("IssuerURL") == issuer and i.get("Type") == "kubernetes" for i in issuers)
+    action = "satisfied"
+    if not has:
+        if req.get("allow_update"):
+            rows.append(_row(step, "Fulcio OIDC issuer", "override", f"adding {issuer} (Type kubernetes) to {req['name']} (serveguard_allow_securesign_update)"))
+            action = "update"
+        else:
+            return {"rows": rows + [_row(step, "Fulcio OIDC issuer", "conflict",
+                                         f"{req['name']} does not trust {issuer} with Type kubernetes; set serveguard_allow_securesign_update=true to add it")],
+                    "action": "none", "issuer": issuer}
+    comps = raw.get("components") or {}
+    not_ready = [k for k in RHTAS_COMPONENTS if not any(_condition_true(c, "Ready") for c in comps.get(k) or [])]
+    if not_ready and action == "satisfied":
+        rows.append(_row(step, "components", "wait", "not Ready: " + ", ".join(not_ready)))
+        action = "wait"
+    elif not not_ready and action == "satisfied":
+        rows.append(_row(step, "Securesign", "satisfied", f"{req['name']} with {', '.join(RHTAS_COMPONENTS)} Ready"))
+    return {"rows": rows, "action": action, "issuer": issuer}
+
+
+def sg_eval_image_policy(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: existing ClusterImagePolicy|None, key_exists. req: enabled, openshift_version, ga, allow_tp,
+    mode, key_path, desired_spec, name."""
+    step = "image policy"
+    if not req.get("enabled"):
+        return {"rows": [_row(step, "ClusterImagePolicy", "n/a", "serveguard_cluster_image_policy is false")], "action": "none"}
+    rows = []
+    v = req.get("openshift_version")
+    if not v:
+        rows.append(_row(step, "OpenShift version", "n/a", "not known yet"))
+    elif not version_at_least(v, req["ga"]):
+        if req.get("allow_tp") and version_at_least(v, "4.19.0"):
+            rows.append(_row(step, "OpenShift version", "override", f"{v}: ClusterImagePolicy is Tech Preview before {req['ga']}"))
+        else:
+            rows.append(_row(step, "OpenShift version", "fail",
+                             f"{v} < {req['ga']} (GA); set serveguard_allow_cip_tech_preview=true on 4.19 or disable it"))
+    else:
+        rows.append(_row(step, "OpenShift version", "ok", f"{v} >= {req['ga']} (GA)"))
+    if req.get("mode") == "keyless":
+        rows.append(_row(step, "root of trust", "fail", "only PublicKey is implemented here; keyless (FulcioCAWithRekor) is not"))
+    elif not req.get("key_path"):
+        rows.append(_row(step, "receiver image key", "fail", "set serveguard_receiver_image_public_key to the PEM the receiver image is signed with"))
+    elif not raw.get("key_exists"):
+        rows.append(_row(step, "receiver image key", "fail", f"{req['key_path']} not found"))
+    rows.append(_row(step, "ROSA HCP", "warn", "ClusterImagePolicy on ROSA HCP node pools is unverified; it covers images, never the adapter"))
+    if _blocking(rows):
+        return {"rows": rows, "action": "none"}
+    cur = raw.get("existing")
+    if cur is None:
+        rows.append(_row(step, req["name"], "todo", "will create it"))
+        return {"rows": rows, "action": "create"}
+    if (cur.get("spec") or {}) == req.get("desired_spec"):
+        rows.append(_row(step, req["name"], "satisfied", "present with the same spec"))
+        return {"rows": rows, "action": "satisfied"}
+    rows.append(_row(step, req["name"], "conflict", "exists with another spec; delete it or rename"))
+    return {"rows": rows, "action": "none"}
+
+
 # ---- integrated image registry --------------------------------------------------------
 
 
 def sg_eval_registry(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: cluster_reachable, config (imageregistry Config cluster)|None, deployment|None. req: needed."""
+    """raw: cluster_reachable, config (imageregistry Config cluster)|None, deployment|None,
+    quay {registry (QuayRegistry CR)|None, referrers: bool|None}.
+    req: needed (internal registry used), registry (host for adapters/attestations), quay {..}|{}."""
+    out = _eval_internal_registry(raw, req)
+    step = "registry"
+    host = req.get("registry") or ""
+    if req.get("quay"):
+        q = (raw.get("quay") or {}).get("registry")
+        if not raw.get("cluster_reachable"):
+            out["rows"].append(_row(step, "Quay", "n/a", "cluster not reachable yet"))
+        elif q is None:
+            out["rows"].append(_row(step, "Quay", "fail", f"QuayRegistry {req['quay'].get('namespace')}/{req['quay'].get('name')} not found"))
+        else:
+            ver = ((q.get("status") or {}).get("currentVersion") or "")
+            ref = (raw.get("quay") or {}).get("referrers")
+            out["rows"].append(_row(step, "Quay version", "ok" if version_at_least(ver or None, req["quay_min"]) else "fail",
+                                    f"{ver or 'unknown'} (need >= {req['quay_min']} for OCI 1.1 referrers)"))
+            out["rows"].append(_row(step, "Quay referrers API", "ok" if ref else "fail",
+                                    "FEATURE_REFERRERS_API: true" if ref else "FEATURE_REFERRERS_API is not true in its config bundle"))
+    elif host.startswith("image-registry.openshift-image-registry.svc"):
+        out["rows"].append(_row(step, "OCI referrers", "ok",
+                                "internal registry: referrers API unverified; the collection uses the OCI tag-schema fallback"))
+    elif host:
+        out["rows"].append(_row(step, "OCI referrers", "warn", f"{host} is not checked here (set serveguard_quay for a Quay registry)"))
+    return out
+
+
+def _eval_internal_registry(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
     step = "registry"
     if not req.get("needed"):
         return {"rows": [_row(step, "internal registry", "n/a", "serveguard_image set; no in-cluster build")], "action": "none"}
@@ -819,7 +1027,8 @@ def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
                 "action": "none", "workload": {}}
     rows.append(_row(step, req["collection"], "ok", f"{coll.get('version', '?')} at {coll.get('path', '?')}"))
     defaults, overrides = raw.get("defaults") or {}, raw.get("overrides") or {}
-    workload: dict[str, Any] = {}
+    fallbacks = req.get("fallbacks") or {}
+    workload: dict[str, Any] = {"supply_chain": "serveguard_signing_mode" in defaults}
     for key, var in (req.get("names") or {}).items():
         if var in overrides:
             workload[key] = overrides[var]
@@ -828,6 +1037,9 @@ def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
             workload[key] = defaults[var]
             if var in (req.get("required") or []):
                 rows.append(_row(step, var, "ok", f"{defaults[var]} (collection default)"))
+        elif var in fallbacks:
+            workload[key] = fallbacks[var]
+            rows.append(_row(step, var, "warn", f"{fallbacks[var]!s:.60} (ADR-0001 default; this collection does not declare it yet)"))
         elif var in (req.get("required") or []):
             rows.append(_row(step, var, "fail", f"not in the collection's role defaults; update the serveguard checkout"))
         else:
@@ -1005,6 +1217,10 @@ def sg_instance_vcpus(instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": i.get("type"), "vcpus": int(i.get("cores") or 0) * int(i.get("threads") or 1)} for i in instances or []]
 
 
+def sg_get(d: Any, key: str) -> Any:
+    return d.get(key) if isinstance(d, dict) else None
+
+
 def sg_rc_ok(results: dict[str, dict[str, Any]]) -> dict[str, bool]:
     return {k: v.get("rc") == 0 for k, v in (results or {}).items()}
 
@@ -1085,6 +1301,7 @@ class FilterModule:
             "sg_merge_rows": sg_merge_rows,
             "sg_command_results": sg_command_results,
             "sg_rc_ok": sg_rc_ok,
+            "sg_get": sg_get,
             "sg_operator_diag": sg_operator_diag,
             "sg_quota_value": sg_quota_value,
             "sg_instance_vcpus": sg_instance_vcpus,
@@ -1101,6 +1318,10 @@ class FilterModule:
             "sg_eval_cluster": sg_eval_cluster,
             "sg_eval_versions": sg_eval_versions,
             "sg_eval_srs": sg_eval_srs,
+            "sg_eval_signing": sg_eval_signing,
+            "sg_eval_kyverno": sg_eval_kyverno,
+            "sg_eval_rhtas": sg_eval_rhtas,
+            "sg_eval_image_policy": sg_eval_image_policy,
             "sg_eval_pool": sg_eval_pool,
             "sg_eval_operators": sg_eval_operators,
             "sg_operator_raw": sg_operator_raw,

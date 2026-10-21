@@ -1,0 +1,33 @@
+---
+- name: The desired ClusterImagePolicy spec
+  ansible.builtin.set_fact:
+    _sg_cip_spec:
+      scopes: ["{{ _sg_registry_host }}/{{ _sg_workload.namespace | default('serveguard-demo') }}/serveguard-receiver"]
+      policy:
+        rootOfTrust:
+          policyType: PublicKey
+          publicKey: { keyData: "{{ _sg_raw_image_policy.key_data | default('') }}" }
+        signedIdentity: { matchPolicy: MatchRepoDigestOrExact }
+  vars:
+    _sg_registry_host: "{{ _sg_workload.registry | default('image-registry.openshift-image-registry.svc:5000') }}"
+
+- name: Evaluate the ClusterImagePolicy
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_image_policy | sg_eval_image_policy({
+           'enabled': serveguard_cluster_image_policy | bool,
+           'openshift_version': _sg_cluster.version | default(none) if (_sg_cluster.version | default('unknown')) != 'unknown'
+                                else (_sg_versions.version | default(none)),
+           'ga': versions.serveguard.requirements.cluster_image_policy_ga,
+           'allow_tp': serveguard_allow_cip_tech_preview | bool,
+           'mode': _sg_workload.signing_mode | default('keypair'),
+           'key_path': serveguard_receiver_image_public_key,
+           'desired_spec': _sg_cip_spec,
+           'name': serveguard_cip_name }) }}
+
+- name: Keep the image-policy decision
+  ansible.builtin.set_fact:
+    _sg_image_policy: "{{ _sg_result }}"
+
+- name: Record image-policy checks
+  ansible.builtin.include_tasks: _record.yml

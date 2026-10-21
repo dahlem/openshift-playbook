@@ -98,6 +98,16 @@ serveguard_workload_vars:
   admit_memory: serveguard_admit_memory
   work_size: serveguard_work_size                    # emptyDir for proving keys (publish, approve)
   logrows: serveguard_logrows                        # names the SRS (kzg<logrows>.srs)
+  # Supply-chain attestation (ADR-0001 §5.4)
+  signing_mode: serveguard_signing_mode              # keypair | keyless (RHTAS)
+  signing_keys_dir: serveguard_signing_keys_dir
+  enforcer: serveguard_enforcer                      # vap | kyverno
+  registry: serveguard_registry
+  attestation_namespace: serveguard_attestation_namespace
+  rhtas_namespace: serveguard_rhtas_namespace
+  rhtas_trust_config: serveguard_rhtas_trust_config
+  rhtas_oidc_issuer: serveguard_rhtas_oidc_issuer
+  fulcio_audience: serveguard_fulcio_audience
 # These must be in the collection's defaults (or overridden); the rest are optional.
 serveguard_workload_required: [predictor_cpu, predictor_memory, publish_cpu, publish_memory, approve_cpu, approve_memory]
 # Environment bindings the collection needs from this checkout layout (not workload
@@ -109,7 +119,37 @@ serveguard_cli: "uv run --project {{ serveguard_repo_dir }}/integrations/openshi
 # OpenShift range for RHOAI 3.5 (versions.yml serveguard.requirements.openshift):
 #   guide (both sources agree, latest 4.20.z) | article (up to 4.22.z)
 serveguard_openshift_range: guide
+# Until the collection with supply-chain attestation (ADR-0001) is merged, these are
+# the ADR's announced defaults, used only where the installed collection does not
+# declare the variable (pre_workload marks each such row WARN). Remove once merged.
+serveguard_workload_fallbacks:
+  serveguard_signing_mode: keypair
+  serveguard_signing_keys_dir: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/serveguard-openshift-ai/keys"
+  serveguard_enforcer: vap
+  serveguard_registry: image-registry.openshift-image-registry.svc:5000
+  serveguard_attestation_namespace: sg-attestations
+  serveguard_rhtas_namespace: trusted-artifact-signer
+  serveguard_rhtas_trust_config: ""
+  serveguard_rhtas_oidc_issuer: ""
+  serveguard_fulcio_audience: sigstore
 serveguard_run_stories: true
+# ---- supply-chain prerequisites (platform side; ADR-0001 §5.4) -----------------------
+# Where the playbook exports the RHTAS instance's Sigstore ClientTrustConfig (keyless);
+# it is then passed to the collection as serveguard_rhtas_trust_config.
+serveguard_rhtas_trust_config_export: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/serveguard-openshift-ai/rhtas-client-trust-config.json"
+serveguard_securesign_name: securesign
+# Kyverno instance for the Nirmata operator (its CR shape is operator-specific; see
+# docs/serveguard.md). Empty: the operator's own default instance is expected.
+serveguard_kyverno_instance: {}
+serveguard_allow_existing_kyverno: false     # use a Kyverno not installed by this playbook
+serveguard_allow_securesign_update: false    # add our OIDC issuer to an existing Securesign
+# Optional Red Hat Quay as the registry (not installed here): the QuayRegistry CR to check.
+serveguard_quay: {}                          # e.g. { namespace: quay, name: registry }
+# Optional ClusterImagePolicy pinning the receiver image's signature (GA in 4.20).
+serveguard_cluster_image_policy: false
+serveguard_receiver_image_public_key: ""     # PEM the receiver image is signed with (PublicKey root)
+serveguard_allow_cip_tech_preview: false     # allow it on 4.19 (Tech Preview)
+serveguard_cip_name: serveguard-receiver
 # Platform-side sizing (not workload settings):
 serveguard_min_node_ephemeral: 30Gi          # vLLM image + model on the predictor's node
 # Estimated per-node system reservation + daemonsets, for the plan check before

@@ -1,0 +1,15 @@
+---
+- name: Evaluate Kyverno
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_kyverno | sg_eval_kyverno({
+           'enforcer': _sg_workload.enforcer | default('vap'),
+           'min': versions.serveguard.requirements.kyverno_min,
+           'allow_existing': serveguard_allow_existing_kyverno | bool }) }}
+
+- name: Keep the Kyverno decision
+  ansible.builtin.set_fact:
+    _sg_kyverno: "{{ _sg_result }}"
+
+- name: Record Kyverno checks
+  ansible.builtin.include_tasks: _record.yml

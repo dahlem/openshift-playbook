@@ -14,6 +14,13 @@
   ansible.builtin.include_role:
     name: serveguard.openshift_ai.trust_anchor
 
+
+- name: Assert the trust_anchor supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: trust_anchor
 - name: Receiver image
   ansible.builtin.include_role:
     name: serveguard.openshift_ai.receiver_image
@@ -32,11 +39,25 @@
   ansible.builtin.include_role:
     name: serveguard.openshift_ai.publisher
 
+
+- name: Assert the publisher supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: publisher
 - name: Public verifier admits (writes the verdict)
   ansible.builtin.include_role:
     name: serveguard.openshift_ai.public_verifier
     tasks_from: admit
 
+
+- name: Assert the admit supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: admit
 - name: Serving consumer serves (guard init-container, vLLM)
   ansible.builtin.include_role:
     name: serveguard.openshift_ai.serving_consumer

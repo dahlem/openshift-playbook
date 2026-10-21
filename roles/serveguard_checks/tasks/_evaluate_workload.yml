@@ -5,6 +5,7 @@
       {{ _sg_raw_workload | sg_eval_workload({
            'collection': serveguard_collection,
            'names': serveguard_workload_vars,
+           'fallbacks': serveguard_workload_fallbacks | default({}),
            'required': serveguard_workload_required | map('extract', serveguard_workload_vars) | list }) }}
 
 - name: Keep the effective workload requests

@@ -1,0 +1,45 @@
+---
+- name: Read the Securesign CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: securesigns.rhtas.redhat.com
+  register: _sg_rh_crd
+  when: _sg_cluster_reachable | bool
+
+- name: Read Securesign instances (all namespaces)
+  kubernetes.core.k8s_info:
+    api_version: rhtas.redhat.com/v1alpha1
+    kind: Securesign
+  register: _sg_rh_ss
+  failed_when: false
+  when: _sg_cluster_reachable | bool and (_sg_rh_crd.resources | default([]) | length > 0)
+
+- name: Read RHTAS components in the demo's RHTAS namespace
+  kubernetes.core.k8s_info:
+    api_version: rhtas.redhat.com/v1alpha1
+    kind: "{{ item }}"
+    namespace: "{{ _sg_workload.rhtas_namespace | default('trusted-artifact-signer') }}"
+  register: _sg_rh_comp
+  failed_when: false
+  loop: [Fulcio, Rekor, CTlog, Trillian, Tuf]
+  when: _sg_cluster_reachable | bool and (_sg_rh_crd.resources | default([]) | length > 0)
+
+- name: Read the cluster's service-account issuer
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Authentication
+    name: cluster
+  register: _sg_rh_auth
+  when: _sg_cluster_reachable | bool
+
+- name: Collect RHTAS facts
+  ansible.builtin.set_fact:
+    _sg_raw_rhtas:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      crd: "{{ _sg_rh_crd.resources | default([]) | length > 0 }}"
+      securesigns: "{{ _sg_rh_ss.resources | default([]) }}"
+      components: >-
+        {{ dict(_sg_rh_comp.results | default([]) | map(attribute='item')
+                | zip(_sg_rh_comp.results | default([]) | map(attribute='resources', default=[]))) }}
+      issuer: "{{ ((_sg_rh_auth.resources | default([]) | first | default({})).spec | default({})).serviceAccountIssuer | default('') }}"

@@ -56,9 +56,31 @@
           - _sg_checks | selectattr('step', 'equalto', 'cluster') | map(attribute='detail') | first is search('OpenShift 4.20.12')
           - _sg_pool.action == 'create'
           - _sg_operators.subset == ['cert_manager', 'rhoai']
+          - _sg_kyverno.action == 'none' and _sg_rhtas.action == 'none'
           - _sg_platform.action == 'create'
           - _sg_checks | selectattr('status', 'equalto', 'n/a') | list | length >= 5
           - _sg_checks | selectattr('check', 'equalto', 'vCPU quota Standard (A,C,D,H,I,M,R,T,Z)') | map(attribute='detail') | first is search('this run adds 24')
+        fail_msg: "{{ _sg_checks | map('serveguard_row') | list }}"
+
+    - name: Reset the table
+      ansible.builtin.set_fact:
+        _sg_checks: []
+
+    # ---- keyless + kyverno on an empty account: RHTAS and Kyverno join the operators
+    - name: Preflight an empty account in keyless + kyverno mode
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: preflight }
+      vars:
+        serveguard_checks_fixtures: "{{ worlds.empty_account_keyless_kyverno }}"
+
+    - name: Keyless + kyverno - decisions
+      ansible.builtin.assert:
+        that:
+          - _sg_blocking | length == 0
+          - _sg_workload.signing_mode == 'keyless' and _sg_workload.enforcer == 'kyverno'
+          - _sg_operators.subset == ['cert_manager', 'rhoai', 'rhtas', 'kyverno']
+          - _sg_kyverno.action == 'install'
+          - _sg_rhtas.action == 'create'
+          - _sg_checks | selectattr('check', 'equalto', 'RHTAS on OpenShift') | map(attribute='status') | list == ['ok']
         fail_msg: "{{ _sg_checks | map('serveguard_row') | list }}"
 
     - name: Reset the table

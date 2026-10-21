@@ -1,0 +1,71 @@
+[
+ {
+  "metadata": {
+   "namespace": "sg-attestations",
+   "name": "push-ip-10-0-1-1"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-1",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "6",
+       "memory": "20Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "sg-attestations",
+   "name": "push-ip-10-0-1-2"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-2",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "6",
+       "memory": "20Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "sg-attestations",
+   "name": "push-ip-10-0-1-3"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-3",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "6",
+       "memory": "20Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ }
+]

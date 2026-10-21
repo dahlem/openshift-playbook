@@ -1,0 +1,86 @@
+---
+# Build the instance's Sigstore ClientTrustConfig from its TUF repository:
+# timestamp -> snapshot -> targets -> trusted_root.json (+ signing_config if served),
+# each target checked against the SHA-256 the targets metadata lists. This checks
+# integrity, not TUF signatures: trust rests on the cluster route's TLS and on who can
+# read it. Without a signing_config target, the signing config is built from the
+# Fulcio and Rekor URLs the components report.
+
+- name: Read TUF timestamp metadata
+  ansible.builtin.uri:
+    url: "{{ _sc_urls.Tuf }}/timestamp.json"
+    return_content: true
+    validate_certs: "{{ serveguard_rhtas_validate_certs | bool }}"
+  register: _sc_ts
+
+- name: Read TUF snapshot metadata
+  ansible.builtin.uri:
+    url: "{{ _sc_urls.Tuf }}/{{ _sc_snap_ver }}.snapshot.json"
+    return_content: true
+    validate_certs: "{{ serveguard_rhtas_validate_certs | bool }}"
+  register: _sc_snap
+  vars:
+    _sc_snap_ver: "{{ (_sc_ts.content | from_json).signed.meta['snapshot.json'].version }}"
+
+- name: Read TUF targets metadata
+  ansible.builtin.uri:
+    url: "{{ _sc_urls.Tuf }}/{{ _sc_tgt_ver }}.targets.json"
+    return_content: true
+    validate_certs: "{{ serveguard_rhtas_validate_certs | bool }}"
+  register: _sc_targets
+  vars:
+    _sc_tgt_ver: "{{ (_sc_snap.content | from_json).signed.meta['targets.json'].version }}"
+
+- name: Fetch the trust targets
+  ansible.builtin.uri:
+    url: "{{ _sc_urls.Tuf }}/targets/{{ _sc_t[item].hashes.sha256 }}.{{ item }}"
+    return_content: true
+    validate_certs: "{{ serveguard_rhtas_validate_certs | bool }}"
+  register: _sc_files
+  loop: "{{ ['trusted_root.json', 'signing_config.v0.2.json'] | select('in', _sc_t) | list }}"
+  vars:
+    _sc_t: "{{ (_sc_targets.content | from_json).signed.targets }}"
+
+- name: Targets match the hashes the targets metadata lists
+  ansible.builtin.assert:
+    that: (item.content | hash('sha256')) == ((_sc_targets.content | from_json).signed.targets[item.item].hashes.sha256)
+    fail_msg: "{{ item.item }} from {{ _sc_urls.Tuf }} does not match its listed SHA-256"
+    quiet: true
+  loop: "{{ _sc_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Assemble the ClientTrustConfig
+  ansible.builtin.set_fact:
+    _sc_trust_config:
+      mediaType: application/vnd.dev.sigstore.clienttrustconfig.v0.1+json
+      trustedRoot: "{{ (_sc_files.results | selectattr('item', 'equalto', 'trusted_root.json') | first).content | from_json }}"
+      signingConfig: >-
+        {{ ((_sc_files.results | selectattr('item', 'equalto', 'signing_config.v0.2.json') | first).content | from_json)
+           if ('signing_config.v0.2.json' in (_sc_files.results | map(attribute='item')))
+           else {'mediaType': 'application/vnd.dev.sigstore.signingconfig.v0.2+json',
+                 'caUrls': [{'url': _sc_urls.Fulcio, 'majorApiVersion': 1, 'validFor': {'start': '2024-01-01T00:00:00Z'}, 'operator': 'rhtas'}],
+                 'oidcUrls': [],
+                 'rekorTlogUrls': [{'url': _sc_urls.Rekor, 'majorApiVersion': 1, 'validFor': {'start': '2024-01-01T00:00:00Z'}, 'operator': 'rhtas'}],
+                 'tsaUrls': [],
+                 'rekorTlogConfig': {'selector': 'ANY'},
+                 'tsaConfig': {'selector': 'ANY'}} }}
+
+- name: Trust-config directory
+  ansible.builtin.file:
+    path: "{{ serveguard_rhtas_trust_config_export | dirname }}"
+    state: directory
+    mode: "0700"
+
+- name: Write the ClientTrustConfig
+  ansible.builtin.copy:
+    content: "{{ _sc_trust_config | to_nice_json }}"
+    dest: "{{ serveguard_rhtas_trust_config_export }}"
+    mode: "0644"
+
+- name: The exported trust config names this instance, not public-good Sigstore
+  ansible.builtin.assert:
+    that:
+      - _sc_trust_config.trustedRoot is mapping
+      - (_sc_trust_config | to_json) is not search('sigstore\.dev')
+    fail_msg: "the exported trust config is empty or points at public-good Sigstore"

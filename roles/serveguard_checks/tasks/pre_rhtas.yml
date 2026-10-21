@@ -1,0 +1,13 @@
+---
+- name: "pre rhtas: read state"
+  ansible.builtin.include_tasks: _gather_rhtas.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre rhtas: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_rhtas: "{{ serveguard_checks_fixtures.rhtas }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre rhtas: decide"
+  ansible.builtin.include_tasks: _evaluate_rhtas.yml

@@ -2,3 +2,8 @@
 - name: "stub public_verifier admit: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['public_verifier:admit'] }}"
+
+- name: "stub public_verifier admit: supply-chain fact (ADR-0001)"
+  ansible.builtin.set_fact:
+    serveguard_vsa: "{{ stub_vsa | default({'digest': 'sha256:' ~ 'f' * 64, 'result': 'PASSED'}) }}"
+  when: stub_supply_chain | default(false) | bool

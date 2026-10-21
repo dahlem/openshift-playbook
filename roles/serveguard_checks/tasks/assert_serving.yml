@@ -11,8 +11,10 @@
     that:
       - serveguard_serving_result is defined
       - serveguard_serving_result.ready | default(false) | bool
-      - (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('') == 'true'
-      - _sg_verdict_missing | length == 0
+      # With supply-chain attestation (ADR-0001) the verdict annotations are gone: the
+      # VSA (asserted after admit) and the guard carry the verdict instead.
+      - _sg_sc or (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('') == 'true'
+      - _sg_sc or _sg_verdict_missing | length == 0
       - serveguard_serving_result.guard_exit_code | default(-1) | int == 0
       - _sg_digest_before | default('') | length == 0 or _sg_digest_now == _sg_digest_before
     fail_msg: >-
@@ -29,8 +31,18 @@
       {{ ['serveguard.io/adapter-digest', 'serveguard.io/package-root', 'serveguard.io/base-hash']
          | reject('in', (serveguard_serving_result.annotations | default({})) | dict2items
                         | rejectattr('value', 'falsy') | map(attribute='key') | list) | list }}
-    _sg_digest_now: "{{ (serveguard_serving_result.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}"
+    _sg_sc: "{{ _sg_workload.supply_chain | default(false) | bool }}"
+    # With supply chain: the reference the served InferenceService names
+    # (SERVEGUARD_ADAPTER_REF), if serveguard_serving_result reports it; else the
+    # publisher's serveguard_adapter_ref (then the comparison cannot detect a change).
+    _sg_digest_now: >-
+      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref | default(''))
+         if (_sg_workload.supply_chain | default(false) | bool)
+         else (serveguard_serving_result.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}
 
-- name: Remember the admitted adapter digest
+- name: Remember the admitted adapter digest (the digest-pinned adapter ref with supply chain)
   ansible.builtin.set_fact:
-    _sg_admitted_digest: "{{ serveguard_serving_result.annotations['serveguard.io/adapter-digest'] }}"
+    _sg_admitted_digest: >-
+      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref)
+         if (_sg_workload.supply_chain | default(false) | bool)
+         else serveguard_serving_result.annotations['serveguard.io/adapter-digest'] }}
