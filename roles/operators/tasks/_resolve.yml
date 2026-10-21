@@ -1,0 +1,26 @@
+---
+# Resolve operators_enabled into one record per operator:
+# versions.operators[key] (channel, package, source) + operators_install[key] + key.
+
+- name: Assert enabled operators are known
+  ansible.builtin.assert:
+    that:
+      - item in versions.operators
+      - item in operators_install
+    fail_msg: >-
+      Operator '{{ item }}' in operators_enabled has no entry in versions.yml
+      (operators.{{ item }}) or roles/operators/defaults/main.yml (operators_install.{{ item }}).
+  loop: "{{ operators_enabled }}"
+
+- name: Reset resolved operator list
+  ansible.builtin.set_fact:
+    _operators: []
+
+- name: Resolve enabled operators
+  ansible.builtin.set_fact:
+    _operators: >-
+      {{ _operators + [versions.operators[item] | combine(operators_install[item], {
+           'key': item,
+           'channel': rhoai_channel if item == 'rhoai' else versions.operators[item].channel
+         })] }}
+  loop: "{{ operators_enabled }}"

@@ -6,12 +6,23 @@
 # Version constraints (loaded from versions.yml)
 versions_file: "{{ playbook_dir }}/../versions.yml"
 
+# Operators — keys of versions.operators to install, in install order.
+# Scenarios override the list (serveguard: cert_manager + rhoai, optionally nfd + gpu).
+operators_enabled: [nfd, gpu, serverless, servicemesh, rhoai]
+rhoai_channel: "{{ versions.operators.rhoai.channel }}"
+# Fail before subscribing if a requested channel is not in the catalog.
+operators_validate_channels: false
+
+# AI platform — serverless: DSC v1, KServe on Knative + Service Mesh (Mistral scenarios)
+#               standard:   DSC v2, KServe standard (RawDeployment) only (RHOAI 3.x)
+ai_platform_mode: serverless
+
 # GPU Machine Pool
 gpu_pool_name: gpu
 gpu_pool_autoscaling: true
 gpu_pool_min_replicas: 1          # ROSA requires min >= 1 when autoscaling is enabled
 gpu_pool_max_replicas: 1
-gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"
+gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"   # "" = no taint
 
 # Model Serving
 model_name: mistral-7b

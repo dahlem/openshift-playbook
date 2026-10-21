@@ -21,7 +21,7 @@
       --enable-autoscaling
       --min-replicas={{ gpu_pool_min_replicas }}
       --max-replicas={{ gpu_pool_max_replicas }}
-      --taints {{ gpu_pool_taint }}
+      {{ ('--taints ' ~ gpu_pool_taint) if (gpu_pool_taint | length > 0) else '' }}
       --labels node.kubernetes.io/instance-type={{ _gpu_instance_type }}
       --subnet={{ rosa_private_subnet }}
   register: _create_pool
@@ -40,7 +40,7 @@
       --name={{ gpu_pool_name }}
       --instance-type={{ _gpu_instance_type }}
       --replicas={{ gpu_pool_replicas | default(1) }}
-      --taints {{ gpu_pool_taint }}
+      {{ ('--taints ' ~ gpu_pool_taint) if (gpu_pool_taint | length > 0) else '' }}
       --labels node.kubernetes.io/instance-type={{ _gpu_instance_type }}
       --subnet={{ rosa_private_subnet }}
   register: _create_pool

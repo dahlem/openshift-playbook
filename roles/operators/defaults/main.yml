@@ -1,0 +1,45 @@
+---
+# Install topology per operator, keyed like versions.operators.
+# Channels, packages and catalog sources stay in versions.yml; this is where
+# each operator lives on the cluster. `operators_enabled` selects the keys.
+#
+#   namespaces:      namespaces to create (in order)
+#   operator_group:  OperatorGroup spec, or omitted when the namespace already
+#                    has one (openshift-operators)
+#   subscription:    Subscription name and namespace
+#   crds:            CRDs that prove the operator is installed
+operators_install:
+  nfd:
+    namespaces: [openshift-nfd]
+    operator_group: { targetNamespaces: [openshift-nfd] }
+    subscription: { name: nfd, namespace: openshift-nfd }
+    crds:
+      - { crd: "nodefeaturediscoveries.nfd.openshift.io", label: "NFD" }
+  gpu:
+    namespaces: [nvidia-gpu-operator]
+    operator_group: { targetNamespaces: [nvidia-gpu-operator] }
+    subscription: { name: gpu-operator-certified, namespace: nvidia-gpu-operator }
+    crds:
+      - { crd: "clusterpolicies.nvidia.com", label: "GPU Operator" }
+  serverless:
+    namespaces: [openshift-serverless]
+    operator_group: {}
+    subscription: { name: serverless-operator, namespace: openshift-serverless }
+    crds: []
+  servicemesh:
+    namespaces: [istio-system]
+    subscription: { name: servicemeshoperator, namespace: openshift-operators }
+    crds: []
+  cert_manager:
+    namespaces: [cert-manager-operator]
+    operator_group: {}
+    subscription: { name: openshift-cert-manager-operator, namespace: cert-manager-operator }
+    crds:
+      - { crd: "certmanagers.operator.openshift.io", label: "cert-manager" }
+  rhoai:
+    namespaces: [redhat-ods-operator]
+    operator_group: {}
+    subscription: { name: rhods-operator, namespace: redhat-ods-operator }
+    crds:
+      - { crd: "dscinitializations.dscinitialization.opendatahub.io", label: "RHOAI DSCI" }
+      - { crd: "datascienceclusters.datasciencecluster.opendatahub.io", label: "RHOAI DSC" }

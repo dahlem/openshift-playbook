@@ -1,6 +1,18 @@
 ---
 # Pre: operators step completed (RHOAI CRDs exist)
 
+- name: Assert AI platform mode is known
+  ansible.builtin.assert:
+    that: ai_platform_mode in ai_platform_api_versions
+    fail_msg: >-
+      ai_platform_mode '{{ ai_platform_mode }}' is not one of
+      {{ ai_platform_api_versions | list | join(', ') }}.
+
+- name: Resolve DSC/DSCI API versions for this mode
+  ansible.builtin.set_fact:
+    _dsci_api_version: "dscinitialization.opendatahub.io/{{ ai_platform_api_versions[ai_platform_mode].dsci }}"
+    _dsc_api_version: "datasciencecluster.opendatahub.io/{{ ai_platform_api_versions[ai_platform_mode].dsc }}"
+
 - name: Verify DSCI CRD exists
   kubernetes.core.k8s_info:
     api_version: apiextensions.k8s.io/v1
@@ -27,14 +39,14 @@
 
 - name: Check if DSCI already exists
   kubernetes.core.k8s_info:
-    api_version: dscinitialization.opendatahub.io/v1
+    api_version: "{{ _dsci_api_version }}"
     kind: DSCInitialization
     name: default-dsci
   register: _pre_dsci
 
 - name: Check if DSC already exists
   kubernetes.core.k8s_info:
-    api_version: datasciencecluster.opendatahub.io/v1
+    api_version: "{{ _dsc_api_version }}"
     kind: DataScienceCluster
     name: default-dsc
   register: _pre_dsc
@@ -54,8 +66,10 @@
     name: default
   register: _pre_smmr
   failed_when: false
+  when: ai_platform_mode == 'serverless'
 
 - name: Determine if deploy is needed
+  when: ai_platform_mode == 'serverless'
   ansible.builtin.set_fact:
     _deploy_needed: >-
       {{ not (
@@ -65,6 +79,31 @@
          (_pre_kserve.resources[0].status.readyReplicas | default(0)) >= 1) and
         (_pre_smmr.resources | default([]) | length > 0 and
          model_namespace in (_pre_smmr.resources[0].status.configuredMembers | default([])))
+      ) }}
+
+- name: Read current DSC components (standard)
+  ansible.builtin.set_fact:
+    _dsc_components: >-
+      {{ (_pre_dsc.resources[0].spec.components | default({}))
+           if (_pre_dsc.resources | length > 0) else {} }}
+  when: ai_platform_mode == 'standard'
+
+- name: Determine if deploy is needed (standard)
+  when: ai_platform_mode == 'standard'
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ not (
+        _pre_dsc.resources | length > 0 and
+        (_pre_dsc.resources[0].status.phase | default('')) == 'Ready' and
+        (_dsc_components.kserve.managementState | default('')) == ai_platform_standard_kserve.managementState and
+        (ai_platform_standard_removed
+         | reject('in', _dsc_components | dict2items
+                        | selectattr('value.managementState', 'defined')
+                        | selectattr('value.managementState', 'equalto', 'Removed')
+                        | map(attribute='key') | list)
+         | list | length == 0) and
+        (_pre_kserve.resources | length > 0 and
+         (_pre_kserve.resources[0].status.readyReplicas | default(0)) >= 1)
       ) }}
 
 - name: "ai_platform: already complete, skipping deploy."

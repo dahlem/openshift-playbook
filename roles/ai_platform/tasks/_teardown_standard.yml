@@ -1,0 +1,18 @@
+---
+- name: Delete DataScienceCluster
+  kubernetes.core.k8s:
+    state: absent
+    api_version: "datasciencecluster.opendatahub.io/{{ ai_platform_api_versions.standard.dsc }}"
+    kind: DataScienceCluster
+    name: default-dsc
+    wait: true
+    wait_timeout: "{{ crd_wait_timeout }}"
+  failed_when: false
+
+- name: Delete DSCInitialization
+  kubernetes.core.k8s:
+    state: absent
+    api_version: "dscinitialization.opendatahub.io/{{ ai_platform_api_versions.standard.dsci }}"
+    kind: DSCInitialization
+    name: default-dsci
+  failed_when: false
