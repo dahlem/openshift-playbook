@@ -148,11 +148,14 @@ ansible-playbook playbooks/llm-endpoint-teardown.yml -e @scenarios/llama-3-70b/b
 The [ServeGuard](https://arxiv.org/abs/2609.21515) OpenShift AI demo uses its own
 playbooks. They install RHOAI 3.x with **only KServe in standard (RawDeployment)
 mode**, plus cert-manager, its only dependency. There is no Serverless or Service
-Mesh. The playbooks then run the serveguard repository's `make demo-up` and
-`make demo-stories`, and print each story's verdict:
+Mesh. The playbooks then run the workload from the `serveguard.openshift_ai`
+collection (`requirements.yml`, or `requirements-dev.yml` for a sibling
+`../serveguard` checkout). The collection's roles are `preflight`,
+`receiver_image`, `publish`, `admit`, `serve` and `stories`, and the playbooks
+print each story's verdict:
 
 ```bash
-# serveguard checked out next to this repo (../serveguard)
+ansible-galaxy collection install -r requirements.yml          # or -r requirements-dev.yml --force
 ansible-playbook playbooks/serveguard-demo-preflight.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass  # read-only table
 ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass   # or gpu.yml
 ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
@@ -365,8 +368,7 @@ model
 | `pull_secret` | Registry credentials in target namespace |
 | `model` | ServingRuntime + InferenceService, wait for Ready |
 | `llm_d` | Disaggregated prefill/decode via Helm (llm-d) |
-| `serveguard_demo` | ServeGuard demo via the serveguard Makefile (`demo-up`, `demo-stories`, `demo-down`) |
-| `serveguard_checks` | ServeGuard pre/postconditions, skip/conflict decisions, resource checks, preflight table |
+| `serveguard_checks` | ServeGuard platform pre/postconditions, skip/conflict decisions, resource checks (workload requests read from `serveguard.openshift_ai`), preflight table, story banner |
 
 ## Design
 

@@ -302,7 +302,9 @@ See `scenarios/serveguard/*.yml` for a scenario that uses both.
 
 ### Guarded Steps (ServeGuard playbooks)
 
-The ServeGuard playbooks wrap each shared role in `roles/serveguard_checks`:
+The ServeGuard playbooks wrap each shared platform role in `roles/serveguard_checks`
+(the workload is the `serveguard.openshift_ai` collection, which guards its own
+roles):
 `pre_<step>.yml` reads the state (`_gather_<step>.yml`, read-only), decides
 (`_evaluate_<step>.yml`), and records rows. The playbook runs the role only when
 the decision asks for it, then runs `post_<step>.yml`. The decisions are pure

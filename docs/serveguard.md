@@ -8,27 +8,30 @@ attempts are refused.
 
 The demo is defined in the serveguard repository
 (`integrations/openshift-ai`; chapter `docs/playbook/serveguard/openshift-ai.md`
-there). This repository provides the platform under it and runs the demo's
-Makefile:
+there). It ships as the Ansible collection `serveguard.openshift_ai`
+(`integrations/openshift-ai/ansible/`). This repository provides the platform
+under it and runs the collection's roles:
 
 | Layer | Owner | What |
 |-------|-------|------|
 | ROSA HCP cluster, serving machine pool | this repo (`rosa_cluster`, `gpu_machinepool`) | 2x `m5.2xlarge` workers + 1 serving node |
 | Operators | this repo (`operators`) | cert-manager, RHOAI (`rhods-operator`), and NFD + NVIDIA GPU for `gpu.yml` |
 | DataScienceCluster | this repo (`ai_platform`, `ai_platform_mode: standard`) | DSC v2, `kserve` Managed (NIM Removed), every other component Removed |
-| Demo | serveguard (`make demo-up`, `make demo-stories`) | namespace, receiver build into the internal registry, publish, admit, serve, stories |
-| Admission policy | serveguard (applied by `demo-up`) | `ValidatingAdmissionPolicy serveguard-admitted-adapters-<namespace>` |
+| Registry, StorageClass, cluster capacity checks | this repo (`serveguard_checks`) | read-only; the workload's requests come from the collection's role defaults |
+| Workload | `serveguard.openshift_ai` roles `preflight` -> `receiver_image` -> `publish` -> `admit` -> `serve` -> `stories`; `teardown` | namespace, receiver build into the internal registry, publish, admit, serve, stories, each with its own pre/postconditions |
+| Admission policy | `serveguard.openshift_ai` | `ValidatingAdmissionPolicy serveguard-admitted-adapters-<namespace>` |
 
-The playbook never calls the integration's `make env-up`. Do not run `env-up` on a
-cluster this playbook installed: it would add a second `OperatorGroup` in
+The playbooks never run the integration's environment setup (`make env-up`). Do not
+run `env-up` on a cluster this playbook installed: it would add a second `OperatorGroup` in
 `redhat-ods-operator` and `cert-manager-operator`, and OLM refuses a namespace with
 two `OperatorGroup`s.
 
 > **Status: validated offline only.** All playbooks pass `ansible-playbook
 > --syntax-check`. `tests/serveguard/run.sh` runs the check decisions on fixture
 > JSON, the preflight sequence over whole-account fixtures, the Mistral identity
-> check and the story summary. Nothing here has run against a cluster or an AWS
-> account yet, so the output shown below is the *expected* form. See
+> check, and the workload wiring against a **stub** `serveguard.openshift_ai`
+> collection (the real one is not published yet). Nothing here has run against a
+> cluster or an AWS account yet, so the output shown below is the *expected* form. See
 > [What to confirm on the first run](#what-to-confirm-on-the-first-run).
 
 ## Scenarios
@@ -38,11 +41,15 @@ two `OperatorGroup`s.
 | `scenarios/serveguard/cpu.yml` | `registry.redhat.io/rhaii/vllm-cpu-rhel9:3.5.0` (x86_64 CPU, custom runtime) | 1x `m6i.2xlarge` (8 vCPU, 32 GiB) | cert-manager, RHOAI |
 | `scenarios/serveguard/gpu.yml` | `registry.redhat.io/rhaii/vllm-cuda-rhel9:3.5.0`, 1x `nvidia.com/gpu` | 1x `g6.2xlarge` (1x L4, 8 vCPU, 32 GiB) | cert-manager, NFD, NVIDIA GPU, RHOAI |
 
-Both serve `HuggingFaceTB/SmolLM2-135M-Instruct` at a pinned revision. Pins live in
-`versions.yml` under `serveguard:`.
+The model, its revision and every workload resource request are the collection's
+role defaults. This repository pins only the platform side (`versions.yml`,
+`serveguard:`): RHOAI channel, the vLLM images per scenario and the pool types.
 
-Sizing. The predictor requests and limits 4 vCPU and 8 GiB, the integration's
-default (the Makefile does not expose it). A 4 vCPU node cannot hold that next to
+Sizing. The predictor requests and limits `serveguard_predictor_cpu` /
+`serveguard_predictor_memory`, which default to 4 vCPU and 8 GiB in the
+collection. The quota and capacity checks read these values from the collection;
+nothing in this repository restates them. Override both in a scenario or with `-e`:
+the checks and the collection then use the override. A 4 vCPU node cannot hold that next to
 the node's own daemons. So the serving pool is 8 vCPU. For GPU that means
 `g6.2xlarge`, not `g6.xlarge`. The two default `m5.2xlarge` workers carry the
 operators, KServe, the receiver build and the Jobs. That matches the RHOAI 3.5
@@ -79,8 +86,8 @@ Wall-clock time from an empty account, expected:
 | Serving pool node Ready | 5 to 10 min |
 | cert-manager + RHOAI + DSC Ready | 10 to 15 min |
 | GPU stack (NFD, driver build) - `gpu.yml` only | 10 to 20 min |
-| `make demo-up` (receiver image build, fetch, publish, admit, vLLM image pull) | 20 to 30 min |
-| `make demo-stories` | 10 to 15 min |
+| workload: receiver image build, publish, admit, serve (vLLM image pull) | 20 to 30 min |
+| workload: stories | 10 to 15 min |
 | **Total** | **about 75 to 110 min** |
 
 ## Prerequisites
@@ -96,7 +103,7 @@ Workstation:
 | `rosa` CLI | `>=1.2.60` (`versions.yml`) | cluster and machine pools |
 | `ocm` CLI | current | OCM login and access grants |
 | `oc` | 4.19+ | the demo targets OpenShift 4.19+ (`versions.yml` requires 4.17+ for the other scenarios) |
-| `make`, `uv`, `curl`, `python3` | current | the serveguard Makefile |
+| `serveguard.openshift_ai` collection | from `requirements.yml` (git) or `requirements-dev.yml` (sibling checkout) | the workload; its `preflight` role checks its own tools |
 
 No container engine is needed: the receiver image is built in the cluster.
 
@@ -111,8 +118,8 @@ Accounts and credentials:
   - `gpu.yml` only: *Running On-Demand G and VT instances*: at least 8 vCPU. New
     accounts often start at 0. The `gpu_machinepool` preconditions check this and
     print the quota request command.
-- The serveguard repository checked out **next to** this one (`../serveguard`).
-  Or pass `-e serveguard_repo_dir=/path/to/serveguard`.
+- For local development, the serveguard repository checked out **next to** this
+  one (`../serveguard`). It is installed from there with `requirements-dev.yml`.
 
 The vLLM images come from `registry.redhat.io`. The ROSA cluster's global pull
 secret already covers it, so the vault needs only the OCM token.
@@ -123,11 +130,22 @@ secret already covers it, so the vault needs only the OCM token.
 
 ```bash
 git clone <openshift-playbook-url> openshift-playbook
-git clone <serveguard-url> serveguard          # sibling of openshift-playbook
 cd openshift-playbook
 python3 -m pip install 'ansible-core>=2.15' kubernetes jmespath
-ansible-galaxy collection install -r requirements.yml
+ansible-galaxy collection install -r requirements.yml       # includes serveguard.openshift_ai from git
 ```
+
+`requirements.yml` installs `serveguard.openshift_ai` from
+`https://github.com/dahlem/serveguard.git#/integrations/openshift-ai/ansible`
+(branch `main`). To work against a local checkout instead:
+
+```bash
+git clone https://github.com/dahlem/serveguard.git ../serveguard   # sibling of openshift-playbook
+ansible-galaxy collection install -r requirements-dev.yml --force   # type: dir; re-run after changing it
+```
+
+Both install into `./collections` (`ansible.cfg`). The preflight's `workload` rows
+show which version is in use and from where.
 
 ### 2. Vault
 
@@ -178,8 +196,10 @@ candidate.
 ansible-playbook playbooks/serveguard-demo-preflight.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
 ```
 
-This runs every precondition below against the account and, if it exists, the
-cluster. It prints one table and changes nothing: no cluster, pool, admin user,
+This runs every platform precondition below against the account and, if it
+exists, the cluster. It then runs the collection's own read-only
+`serveguard.openshift_ai.preflight` role, once the cluster is reachable. It prints
+one table and changes nothing: no cluster, pool, admin user,
 operator or namespace is created. Cluster-side rows show `N/A` until the cluster
 exists and `oc` is logged in to it. The playbook exits non-zero if any row is
 `FAIL` or `CONFLICT`. Fix those rows, re-run until it says `Ready to deploy`, then
@@ -196,10 +216,11 @@ ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml 
 ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
 ```
 
-Each step runs as *pre → step → post* (`playbooks/includes/serveguard-demo-steps.yml`):
+Platform steps run as *pre → step → post* (`playbooks/includes/serveguard-demo-steps.yml`):
 
-1. `login`, then the read-only checks: local tools, the AWS account, cluster,
-   serving pool, and quotas/instance types.
+1. `login`, then the read-only checks: local tools, the workload requests
+   (`serveguard.openshift_ai` role defaults), the AWS account, cluster, serving
+   pool, and quotas/instance types.
 2. `rosa_cluster` creates the HCP cluster (OpenShift `versions.cluster.openshift_version`),
    only if it is absent or still installing. `login` then logs `oc` in.
 3. `cluster_access`: OCM role grants (`profiles/`).
@@ -214,80 +235,63 @@ Each step runs as *pre → step → post* (`playbooks/includes/serveguard-demo-s
    webhook and the RHOAI CSV, then for the operator's `default-dsci`, and creates
    one only if the operator has not. It applies the DSC v2 unless it is already
    `Ready` with the required component states.
-8. The registry, storage and capacity checks, then `serveguard_demo`. That role
-   runs `make demo-up` with `NAMESPACE`, `ISVC`, `ACCELERATOR`, `VLLM_IMAGE`,
-   `MODEL`, `MODEL_REVISION`, `RHOAI_CHANNEL` and `TIMEOUT`, plus
-   `PREDICTOR_CPU`/`PREDICTOR_MEMORY` once the Makefile declares them. It is
-   skipped if the admitted service is already Ready.
-9. The story preconditions, `make demo-stories` (full output under `logs/`, then
-   the summary), and the story postconditions.
-10. The table of every check.
+8. The registry, StorageClass and capacity checks for the workload.
+9. The workload (`playbooks/includes/serveguard-demo-workload.yml`): the
+   collection roles `preflight` → `receiver_image` → `publish` → `admit` →
+   `serve` → `stories`. Each role checks its own pre- and postconditions, skips
+   what already holds and stops on conflicts. Variables a scenario or `-e` sets
+   (`serveguard_predictor_cpu`, `serveguard_vllm_image`, ...) reach the roles;
+   everything else is the collection's default.
+10. The story banner and the table of every platform check.
 
-Pass `-e serveguard_redeploy=true` to publish and admit again, or
-`-e serveguard_run_stories=false` to stop before the stories. If you already have
-a ROSA HCP cluster, use the same command with
+Pass `-e serveguard_run_stories=false` to stop before the stories. The
+collection's own variables (for example re-admitting) are documented in its
+README. If you already have a ROSA HCP cluster, use the same command with
 `playbooks/serveguard-demo-on-cluster.yml`. It never creates a cluster: a missing
 one is a `FAIL`.
 
 ### 7. Expected output
 
-Not yet observed on a cluster. The form comes from the roles' banners.
+Not yet observed on a cluster. The banner is built from the `stories` role's
+structured result, `serveguard_stories_result`, a list of
+`{story, expected, verdict, reason}`. The story names and reasons below are
+illustrative; the collection defines them.
 
 ```
-============================================================
-  ServeGuard adapter admitted and serving
-============================================================
-
-  InferenceService: serveguard-demo/serveguard-demo (KServe standard)
-  Model:            HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366
-  Serving:          cpu (registry.redhat.io/rhaii/vllm-cpu-rhel9:3.5.0)
-  RHOAI channel:    stable-3.5
-  Policy:           ValidatingAdmissionPolicy serveguard-admitted-adapters-serveguard-demo
-  Verdict:
-    serveguard.io/adapter-digest = 28266fff...
-    serveguard.io/admitted = true
-    serveguard.io/base-hash = ecf2f3e1...
-    serveguard.io/package-root = 17a154dc...
-
-============================================================
-
 ============================================================
   ServeGuard on OpenShift AI: all stories as expected
 ============================================================
 
-  served       admitted adapter answers: "..."
-  refused      an InferenceService without a ServeGuard verdict
-               denied: adapter must be admitted by ServeGuard (...)
-  refused      a verdict written by anyone but the receiver
-               denied: only the ServeGuard receiver (system:serviceaccount:serveguard-demo:serveguard-receiver) ...
-  refused      changing the admitted service's adapter digest
-               denied: only the ServeGuard receiver ...
-  refused      an adapter whose read factor sees past the monitor
-               reason: layer 0: served (A, C, rho) do not open the commitment
-  refused      a recommitted package (certificate) under a new root
-               reason: package root does not match trusted identity
-  refused      adapter bytes changed after admission; the predictor never restarts serving
-               serveguard: REFUSED: adapter bytes differ from the admitted adapter digest
-  restored     restore the admitted adapter bytes; the guard admits them again
-               inferenceservice.serving.kserve.io/serveguard-demo condition met
-
-  Full output: logs/serveguard-demo-stories-<timestamp>.log
+  served       admitted adapter serves
+               completion: ...
+  refused      unadmitted InferenceService
+               denied: adapter must be admitted by ServeGuard
+  refused      forged verdict
+               denied: only the ServeGuard receiver may create ...
+  refused      tampered read factor
+               layer 0: served (A, C, rho) do not open the commitment
+  refused      recommitted package
+               package root does not match trusted identity
+  refused      bytes changed after admission
+               adapter bytes differ from the admitted adapter digest
+  restored     restore
 
 ============================================================
 ```
 
-The summary only reports. The pass/fail signal is the Makefile's exit code: an
-apply that is accepted, or a Job that does not fail, stops `make` with a non-zero
-code. The playbook then prints `FAILED (make rc=N)` and the last lines, and fails.
-For what each story proves, read the serveguard chapter.
+A story passes when its verdict equals its expected verdict. Any other story is
+marked `(expected ...)`, the header says how many were not as expected, and the
+playbook fails after printing the banner. If the `stories` role fails itself, the
+banner still prints whatever it recorded. For what each story proves, read the
+serveguard chapter.
 
 ### 8. Teardown
 
 ```bash
-# Demo + platform + serving pool (keeps the cluster)
+# Workload + platform + serving pool (keeps the cluster)
 ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
 
-# Demo only (keeps RHOAI, cert-manager and the serving pool)
+# Workload only (keeps RHOAI, cert-manager and the serving pool)
 ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml -e teardown_platform=false --ask-vault-pass
 
 # Everything, including the ROSA cluster (stops all charges except the VPC's NAT gateway)
@@ -295,8 +299,8 @@ ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard
 ```
 
 Pass the scenario you deployed: it selects which operators and which pool to
-remove. The teardown runs `make demo-down` (namespace, then the cluster-scoped
-policy and binding). It then deletes the DSC and DSCI, the operator subscriptions
+remove. The teardown runs `serveguard.openshift_ai.teardown` (the workload,
+including the cluster-scoped policy and binding). It then deletes the DSC and DSCI, the operator subscriptions
 and CSVs, and the serving pool. CRDs are left in place. To remove the one-time
 account resources afterwards, delete the network stack (`rosa create network`
 printed its CloudFormation stack name), the OIDC config (`rosa delete oidc-config`)
@@ -304,7 +308,9 @@ and the account roles (`rosa delete account-roles --mode auto`).
 
 ## Safety: preconditions, postconditions and skips
 
-Every step is guarded by `roles/serveguard_checks`. Before a step it reads the
+Every platform step is guarded by `roles/serveguard_checks`. The workload steps
+are guarded by the `serveguard.openshift_ai` roles themselves. Before a platform
+step, the checks read the
 current state, read-only (`rosa describe`, `aws ... describe/get`, `oc get`). It
 then decides one of:
 
@@ -327,7 +333,8 @@ fixed. The deploy stops at the first blocking row. The preflight reports all row
 
 | Step | Precondition (fails or conflicts when ...) | Skipped when | Postcondition (bounded wait, diagnostics) |
 |------|-------------------------------------------|--------------|---------------------------------------------|
-| local | `rosa` >= 1.2.60, `aws` >= 2, `oc` >= 4.19, `ansible-core` >= 2.15, `uv`, `make`, `ocm` missing/old; Python `kubernetes`/`jmespath` not importable | - | - |
+| local | `rosa` >= 1.2.60, `aws` >= 2, `oc` >= 4.19, `ansible-core` >= 2.15, `ocm` missing/old; Python `kubernetes`/`jmespath` not importable (the workload's tools: its `preflight` role) | - | - |
+| workload requests | `serveguard.openshift_ai` not installed; its role defaults lack `serveguard_predictor_cpu`/`_memory` (other requests missing: `WARN`, their capacity rows are left out) | - | - |
 | AWS account (bootstrap output) | no AWS session or ROSA login; site.yml incomplete; OIDC config, installer/support/worker roles or ELB service-linked role missing; subnets missing or in different VPCs; < 8 free subnet tags | - | - |
 | quotas | instance type not offered in the private subnet's AZ or not ROSA-supported; Standard (`L-1216C47A`) or G/VT (`L-DB2E81BA`) vCPU quota minus running vCPUs < vCPUs this run adds (2 workers if the cluster is new + the serving pool if new); serving type cannot hold predictor + one Job (vCPU/memory minus `serveguard_node_overhead`); `nvidia` on a non-GPU type | - | - |
 | cluster | exists but ROSA classic, other region, state `error`/`uninstalling`, or OpenShift outside 4.19.9 <= v < 4.23 (`serveguard_allow_cluster_version`); on-cluster playbook: absent | `ready` at a supported version | `ready` (`cluster_wait_timeout`), oc logged in to its API; diag: `rosa describe`, `rosa logs install` |
@@ -335,16 +342,18 @@ fixed. The deploy stops at the first blocking row. The preflight reports all row
 | operators (each) | package or channel not in the catalog; package subscribed elsewhere; 2+ OperatorGroups in the namespace; an OperatorGroup with another target mode; Subscription on another channel (`serveguard_allow_channel_change`) or another package/source; CSV `Failed` | Subscription on the requested channel and CSV `Succeeded` (a compatible foreign OperatorGroup is reused, never duplicated) | installedCSV set and `Succeeded` (`crd_wait_timeout`); diag: OperatorGroup/Subscription/InstallPlan/CSV, Subscription conditions, CSV reason, warning events |
 | GPU stack (gpu.yml) | no Ready GPU node | `nvidia.com/gpu` allocatable and ClusterPolicy `ready` | `nvidia.com/gpu` allocatable (20 min); diag: ClusterPolicy status, non-running operator pods, events |
 | DSCI / DSC | DSC CRD missing; 2+ DSCIs or a DSCI not named `default-dsci`; a DSC under another name; `default-dsc` with other component states, e.g. a Knative install with the dashboard Managed (`serveguard_allow_dsc_update`) | `default-dsc` `Ready`, kserve Managed, NIM and the 16 others Removed, KServe controller ready | DSC `Ready` (20 min); diag: DSC status, DSCI phase, RHOAI CSV, deployments, non-running pods, events, cert-manager pods |
-| internal registry | not `Managed`, no storage, no ready `image-registry` (n/a with `serveguard_image`) | - | - |
-| storage | no (or the named) StorageClass; no dynamic provisioner; ReadWriteMany on EBS; existing `serveguard-store` PVC smaller than `serveguard_store_size`, wrong access mode or not Bound | - | - |
-| capacity | no Ready, untainted, schedulable node has free requests (allocatable minus running pods, init containers counted) for: receiver build 2 CPU/4Gi, a Job 0.5/1Gi, the predictor (`serveguard_predictor_*`, + 1 GPU for nvidia, `serveguard_min_node_ephemeral` 30Gi), predictor + a co-located story Job. Reported `N/A` while the serving pool is still to be created | - | - |
-| demo | no checkout or Makefile parameters; custom predictor size but the Makefile has no `PREDICTOR_*`; `serveguard-demo` exists without a verdict, admitted for the other accelerator, or admitted but not Ready (hint: `make story-restore`); `serveguard_redeploy` overrides | admitted and Ready | ISVC Ready (10 min), verdict annotations, VAP + binding, predictor Running with guard exit 0; diag: ISVC conditions, pods/jobs, guard and admit logs, events |
-| stories | admitted service unhealthy; `story-*` leftovers | - | `make` rc 0; none of the four refused services exists; both refused admit Jobs `Failed`; the service is Ready with the **same** adapter digest as before |
+| internal registry | not `Managed`, no storage, no ready `image-registry` (n/a when the collection's `serveguard_image` names an external image) | - | - |
+| StorageClass | no default (or the named `serveguard_storage_class`) StorageClass; no dynamic provisioner; the collection's `serveguard_store_access_mode` is ReadWriteMany on EBS | - | - |
+| capacity | no Ready, untainted, schedulable node has free requests (allocatable minus running pods, init containers counted) for each workload request read from the collection: receiver build, a Job, the predictor (`serveguard_predictor_*`, + 1 GPU for nvidia, `serveguard_min_node_ephemeral` 30Gi), and predictor + a co-located story Job. Reported `N/A` while the serving pool is still to be created | - | - |
+| workload | the collection's roles (`preflight` ... `stories`) | the collection's roles | the collection's roles; then every story's verdict equals its expected verdict (banner) |
 
 The decisions are in `roles/serveguard_checks/filter_plugins/serveguard_checks.py`,
 as pure functions of what was read. `tests/serveguard/run.sh` runs them offline
-on fixture JSON: 68 decision cases, 3 whole-account worlds through the preflight
-sequence, the Mistral identity check and the story summary.
+on fixture JSON: 61 decision cases and 3 whole-account worlds through the
+preflight sequence. It also runs the Mistral identity check and the workload
+wiring against a stub collection (`tests/serveguard/fixtures/collections`): role
+order, reading the requests from role defaults, override pass-through, the banner,
+and failure on a story that is not as expected.
 
 ## Switching to RHOAI 3.6
 
@@ -382,23 +391,20 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 | `operators_enabled` | `[cert_manager, rhoai]` | operators to install, in order |
 | `ai_platform_mode` | `standard` | DSC v2, KServe standard only |
 | `ai_platform_standard_removed` | 16 components | DSC components set `Removed` |
-| `serveguard_accelerator` | `cpu` (`nvidia` in gpu.yml) | Makefile `ACCELERATOR` |
+| `serveguard_accelerator` | `cpu` (`nvidia` in gpu.yml) | GPU checks and pool; passed to the collection |
 | `serveguard_pool_name` / `serveguard_pool_instance_type` | `sg-cpu` / `m6i.2xlarge` | serving machine pool |
-| `serveguard_vllm_image` | `versions.serveguard.vllm_cpu_image` | Makefile `VLLM_IMAGE` |
-| `serveguard_namespace` | `serveguard-demo` | Makefile `NAMESPACE` |
-| `serveguard_image` | `""` (in-cluster build) | Makefile `IMAGE` |
-| `serveguard_storage_class` | `""` (cluster default) | Makefile `STORAGE_CLASS` |
-| `serveguard_repo_dir` | `../serveguard` | serveguard checkout |
-| `serveguard_redeploy` | `false` | re-run `demo-up` even if admitted and Ready |
-| `serveguard_run_stories` | `true` | run `demo-stories` |
-| `serveguard_predictor_cpu` / `serveguard_predictor_memory` | `"4"` / `8Gi` | predictor requests: capacity checks and Makefile `PREDICTOR_CPU`/`PREDICTOR_MEMORY` |
-| `serveguard_store_size` / `serveguard_store_access_mode` | `5Gi` / `ReadWriteOnce` | store PVC, for the storage check |
+| `serveguard_vllm_image` | `versions.serveguard.vllm_cpu_image` (scenario) | passed to the collection |
+| `serveguard_run_stories` | `true` | run the `stories` role |
+| `serveguard_predictor_cpu` / `serveguard_predictor_memory` | collection default (`"4"` / `8Gi`) | set only to override; the capacity checks follow |
+| `serveguard_namespace`, `serveguard_image`, `serveguard_storage_class`, `serveguard_store_access_mode`, `serveguard_*_resources` | collection defaults | read by the platform checks (`serveguard_workload_vars`); set only to override |
 | `serveguard_allow_cluster_version` | `false` | accept a cluster outside 4.19.9 <= v < 4.23 |
 | `serveguard_allow_pool_mismatch` | `false` | use an existing pool whose spec differs, as is |
 | `serveguard_allow_channel_change` | `false` | move an existing Subscription to the requested channel |
 | `serveguard_allow_dsc_update` | `false` | change component states of an existing DSC |
 
-All `serveguard_*` defaults live in `inventory/group_vars/all/config.yml`.
+The platform-side `serveguard_*` settings live in
+`inventory/group_vars/all/config.yml`. The workload's settings are the
+`serveguard.openshift_ai` role defaults. Nothing in this repository restates them.
 
 ## What to confirm on the first run
 
@@ -421,6 +427,16 @@ These were not observable offline:
 - **Scheduling.** Whether the 4 vCPU / 8 GiB predictor and the receiver build fit
   as sized. Whether `--dtype=float32` with LoRA works on the CPU image (an open
   point in the serveguard chapter).
-- **GPU path.** It is untested end to end. The CUDA image's server command
-  (`python -m vllm.entrypoints.openai.api_server`, the Makefile default) is
-  assumed.
+- **GPU path.** It is untested end to end. The CUDA image's server command is
+  the collection's concern.
+- **The `serveguard.openshift_ai` collection.** It does not exist yet. This
+  repository is written against its announced interface and tested against a
+  stub:
+  - roles `preflight`, `receiver_image`, `publish`, `admit`, `serve`, `stories`,
+    `teardown`;
+  - `serveguard_predictor_cpu`/`_memory` in role defaults;
+  - `serveguard_stories_result` = `[{story, expected, verdict, reason}]`;
+  - the optional names in `serveguard_workload_vars` (`config.yml`).
+
+  Reconcile those names, and the git subdirectory in `requirements.yml`, when it
+  lands.
