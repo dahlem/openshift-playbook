@@ -20,18 +20,8 @@ serveguard_wait_node: "{{ node_wait_timeout }}"
 serveguard_wait_operator: "{{ crd_wait_timeout }}"
 serveguard_wait_platform: 1200
 serveguard_wait_gpu: 1200
-serveguard_wait_isvc: 600
 
 # Workers of a cluster this run would create (rosa create cluster default for HCP)
 serveguard_cluster_workers: 2
 # serveguard-demo-on-cluster.yml sets this: the cluster must already exist.
 serveguard_cluster_must_exist: false
-
-# Read-only commands printed when a demo postcondition fails
-_sg_demo_diag:
-  - "oc get inferenceservice -n {{ serveguard_namespace }} -o wide"
-  - "oc describe inferenceservice {{ serveguard_isvc }} -n {{ serveguard_namespace }} | sed -n '/Conditions:/,/Events:/p'"
-  - "oc get pods,jobs -n {{ serveguard_namespace }} -o wide"
-  - "oc logs -n {{ serveguard_namespace }} -l serving.kserve.io/inferenceservice={{ serveguard_isvc }} -c serveguard-guard --tail=5"
-  - "oc logs -n {{ serveguard_namespace }} job/serveguard-admit --tail=5"
-  - "oc get events -n {{ serveguard_namespace }} --field-selector type=Warning --sort-by=.lastTimestamp"

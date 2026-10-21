@@ -20,7 +20,7 @@
     operators_enabled: [cert_manager, rhoai]
     rhoai_channel: stable-3.5
     ai_platform_mode: standard
-    mk_params: [NAMESPACE, ISVC, ACCELERATOR, VLLM_IMAGE, MODEL, MODEL_REVISION, TIMEOUT, PREDICTOR_CPU, PREDICTOR_MEMORY]
+    serveguard_accelerator: cpu
   tasks:
     - name: Load version constraints
       ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
@@ -41,6 +41,9 @@
       vars:
         serveguard_checks_fixtures: "{{ worlds.empty_account }}"
 
+    - name: Empty account - table
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }
+
     - name: Empty account - decisions
       ansible.builtin.assert:
         that:
@@ -49,7 +52,6 @@
           - _sg_pool.action == 'create'
           - _sg_operators.subset == ['cert_manager', 'rhoai']
           - _sg_platform.action == 'create'
-          - _sg_demo.action == 'deploy'
           - _sg_checks | selectattr('status', 'equalto', 'n/a') | list | length >= 5
           - _sg_checks | selectattr('check', 'equalto', 'vCPU quota Standard (A,C,D,H,I,M,R,T,Z)') | map(attribute='detail') | first is search('this run adds 24')
         fail_msg: "{{ _sg_checks | map('serveguard_row') | list }}"
@@ -64,6 +66,9 @@
       vars:
         serveguard_checks_fixtures: "{{ worlds.all_satisfied }}"
 
+    - name: Finished deployment - table
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }
+
     - name: Finished deployment - every step is skipped
       ansible.builtin.assert:
         that:
@@ -72,9 +77,9 @@
           - _sg_pool.action == 'satisfied'
           - _sg_operators.action == 'satisfied' and _sg_operators.subset == []
           - _sg_platform.action == 'satisfied'
-          - _sg_demo.action == 'satisfied'
-          - _sg_checks | selectattr('status', 'equalto', 'satisfied') | list | length == 6
-          - _sg_checks | selectattr('status', 'equalto', 'todo') | map(attribute='check') | list == ['PVC serveguard-store']
+          - _sg_checks | selectattr('status', 'equalto', 'satisfied') | list | length == 5
+          - _sg_checks | selectattr('status', 'equalto', 'todo') | list | length == 0
+          - _sg_workload.predictor_cpu == '4'
         fail_msg: "{{ _sg_checks | map('serveguard_row') | list }}"
 
     - name: Reset the table
@@ -88,6 +93,8 @@
           ansible.builtin.include_role: { name: serveguard_checks, tasks_from: preflight }
           vars:
             serveguard_checks_fixtures: "{{ worlds.mistral_cluster }}"
+        - name: Print the table (fails on blocking rows)
+          ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }
         - name: Not reached
           ansible.builtin.fail:
             msg: "preflight did not fail on conflicts"

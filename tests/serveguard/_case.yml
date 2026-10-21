@@ -12,6 +12,7 @@
     _sg_refused_names: null
     _sg_refused_jobs: []
     _sg_pool: { action: satisfied }
+    _sg_workload: "{{ _test_workload | combine(case.workload | default({})) }}"
 
 - name: Apply case variables and facts
   ansible.builtin.set_fact:

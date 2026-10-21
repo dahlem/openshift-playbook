@@ -16,5 +16,3 @@ clusters/*.yml
 profiles/*.yml
 !profiles/example.yml
 
-# ServeGuard demo story logs
-logs/

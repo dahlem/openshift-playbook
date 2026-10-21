@@ -1,0 +1,38 @@
+---
+# The ServeGuard workload, from the serveguard.openshift_ai collection. Each of its
+# roles checks its own pre- and postconditions, skips what already holds and stops
+# on conflicts. Workload variables (serveguard_predictor_cpu, ...) are the
+# collection's role defaults; a scenario or -e that sets one is passed through.
+
+- name: Workload preflight
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.preflight
+
+- name: Receiver image
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.receiver_image
+
+- name: Publish the adapter
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.publish
+
+- name: Admit the adapter
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.admit
+
+- name: Serve the admitted adapter
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.serve
+
+- name: Stories
+  when: serveguard_run_stories | bool
+  block:
+    - name: Run the stories
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.stories
+  always:
+    - name: Story banner
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: stories_banner
+      when: serveguard_stories_result is defined

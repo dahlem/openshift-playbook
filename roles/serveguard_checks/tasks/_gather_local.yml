@@ -15,8 +15,6 @@
       aws: aws --version
       oc: oc version --client
       ocm: ocm version
-      make: make --version
-      uv: uv --version
 
 - name: Check Python modules for the ansible interpreter
   ansible.builtin.command:

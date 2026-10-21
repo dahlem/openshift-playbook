@@ -1,8 +1,0 @@
----
-# ServeGuard OpenShift AI demo: the integration's Makefile drives the demo. This
-# role owns nothing on the cluster except what `make demo-up` creates. The
-# platform (cert-manager, RHOAI, KServe-only DSC) comes from the operators and
-# ai_platform roles, so the integration's `make env-up` is never called.
-#
-# Variables (serveguard_*) live in inventory/group_vars/all/config.yml because
-# the serveguard_checks role reads them too.

@@ -1,12 +1,10 @@
 ---
-- name: Evaluate storage
+- name: Evaluate the StorageClass
   ansible.builtin.set_fact:
     _sg_result: >-
       {{ _sg_raw_storage | sg_eval_storage({
-           'storage_class': serveguard_storage_class,
-           'size': serveguard_store_size,
-           'access_mode': serveguard_store_access_mode,
-           'pvc_name': 'serveguard-store' }) }}
+           'storage_class': _sg_workload.storage_class | default(''),
+           'access_mode': _sg_workload.store_access_mode | default('ReadWriteOnce') }) }}
 
 - name: Record storage checks
   ansible.builtin.include_tasks: _record.yml

@@ -58,10 +58,9 @@ serveguard:
   # Red Hat AI Inference 3.5.0 images (Red Hat AI 3 supported configurations).
   vllm_cpu_image: registry.redhat.io/rhaii/vllm-cpu-rhel9:3.5.0     # x86_64, AVX2 minimum
   vllm_cuda_image: registry.redhat.io/rhaii/vllm-cuda-rhel9:3.5.0
-  model: HuggingFaceTB/SmolLM2-135M-Instruct
-  model_revision: 12fd25f77366fa6b3b4b768ec3050bf629380bac
-  # Serving pool. The predictor requests 4 vCPU / 8 GiB (integration default), so
-  # the pool needs 8 vCPU: m6i.2xlarge (CPU, AVX-512) or g6.2xlarge (1x L4).
+  # Serving pool. The predictor requests 4 vCPU / 8 GiB (serveguard.openshift_ai
+  # default; checked by the quota plan check), so the pool needs 8 vCPU:
+  # m6i.2xlarge (CPU, AVX-512) or g6.2xlarge (1x L4).
   cpu_instance_type: m6i.2xlarge
   gpu_instance_type: g6.2xlarge
   # What the ServeGuard checks (roles/serveguard_checks) require.
@@ -69,7 +68,8 @@ serveguard:
     # RHOAI 3.5 on OpenShift 4.19.9-4.22 (Supported Configurations for 3.x).
     openshift: { min: "4.19.9", max_exclusive: "4.23" }
     # Minimum local CLI versions; null = must be present, any version.
-    cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", uv: "0.4.0", make: "3.81", ocm: null }
+    # (make, uv and the workload's own tools are checked by serveguard.openshift_ai.preflight.)
+    cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", ocm: null }
     python_modules: [kubernetes, jmespath]
     # EC2 vCPU quota codes per instance family (Running On-Demand instances).
     quota_codes:

@@ -1,6 +1,7 @@
 ---
-# Read-only: run every ServeGuard precondition against the account and (if it
-# exists) the cluster, and print a pass/fail table. Changes nothing: no cluster,
+# Read-only: run every ServeGuard platform precondition against the account and
+# (if it exists) the cluster, then the serveguard.openshift_ai preflight role, and
+# print a pass/fail table. Changes nothing: no cluster,
 # pool, admin user, operator or namespace is created. Run it before the deploy.
 #
 # Usage:
@@ -40,7 +41,20 @@
       no_log: true
       when: _sg_pf_rosa.rc != 0 and vault_ocm_token is defined
 
-    - name: Run every precondition and print the table
+    - name: Run every platform precondition
       ansible.builtin.include_role:
         name: serveguard_checks
         tasks_from: preflight
+
+    # The workload's own read-only checks (serveguard.openshift_ai).
+    - name: Workload preflight
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.preflight
+      when:
+        - _sg_raw_workload.collection is not none
+        - _sg_cluster_reachable | bool
+
+    - name: Table of the platform checks
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: report

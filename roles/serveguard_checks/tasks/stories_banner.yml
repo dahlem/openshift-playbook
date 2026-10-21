@@ -1,0 +1,34 @@
+---
+# The story banner, built from the serveguard.openshift_ai stories role's
+# structured result: serveguard_stories_result = [{story, expected, verdict, reason}].
+# A story passes when its verdict equals the expected one.
+
+- name: Assert the stories result has the expected shape
+  ansible.builtin.assert:
+    that:
+      - serveguard_stories_result is sequence
+      - serveguard_stories_result | length > 0
+      - serveguard_stories_result | rejectattr('story', 'defined') | list | length == 0
+      - serveguard_stories_result | rejectattr('expected', 'defined') | list | length == 0
+      - serveguard_stories_result | rejectattr('verdict', 'defined') | list | length == 0
+    fail_msg: "serveguard_stories_result must be a non-empty list of {story, expected, verdict, reason}: {{ serveguard_stories_result | default('undefined') }}"
+
+- name: Compare each verdict with its expectation
+  ansible.builtin.set_fact:
+    _sg_story_failures: >-
+      {{ serveguard_stories_result | sg_story_failures }}
+
+- name: ServeGuard story summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['', '=' * 60,
+          '  ServeGuard on OpenShift AI: ' ~ ('all stories as expected' if not _sg_story_failures
+                                               else (_sg_story_failures | length | string) ~ ' story(ies) NOT as expected'),
+          '=' * 60, '']
+         + (serveguard_stories_result | map('sg_story_lines') | flatten)
+         + ['', '=' * 60, ''] }}
+
+- name: Fail when a story did not behave as expected
+  ansible.builtin.fail:
+    msg: "Not as expected: {{ _sg_story_failures | join(', ') }}"
+  when: _sg_story_failures | length > 0

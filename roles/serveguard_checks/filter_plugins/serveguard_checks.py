@@ -691,7 +691,8 @@ _NO_RWX = ("ebs.csi.aws.com", "kubernetes.io/aws-ebs")
 
 
 def sg_eval_storage(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: cluster_reachable, storage_classes [SC], pvc|None. req: storage_class, size, access_mode, pvc_name."""
+    """raw: cluster_reachable, storage_classes [SC]. req: storage_class, access_mode.
+    The store PVC itself belongs to the serveguard.openshift_ai collection."""
     step = "storage"
     if not raw.get("cluster_reachable"):
         return {"rows": [_row(step, "StorageClass", "n/a", "cluster not reachable yet")], "action": "none"}
@@ -716,26 +717,43 @@ def sg_eval_storage(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
             rows.append(_row(step, "StorageClass", "fail", f"{sc['metadata']['name']} ({prov}) cannot provide ReadWriteMany"))
         else:
             rows.append(_row(step, "StorageClass", "ok", f"{sc['metadata']['name']} ({prov})"))
-    pvc = raw.get("pvc")
-    if pvc is not None:
-        cap = ((pvc.get("status") or {}).get("capacity") or {}).get("storage") or \
-            (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage")
-        modes = (pvc.get("spec") or {}).get("accessModes") or []
-        phase = (pvc.get("status") or {}).get("phase")
-        problems = []
-        if k8s_bytes(cap) < k8s_bytes(req["size"]):
-            problems.append(f"capacity {cap} < {req['size']}")
-        if req["access_mode"] not in modes:
-            problems.append(f"access modes {modes} lack {req['access_mode']}")
-        if phase not in ("Bound", "Pending"):
-            problems.append(f"phase {phase}")
-        if problems:
-            rows.append(_row(step, f"PVC {req['pvc_name']}", "conflict", "; ".join(problems) + "; delete it or run the demo teardown"))
-        else:
-            rows.append(_row(step, f"PVC {req['pvc_name']}", "ok", f"reusing {cap} {phase}"))
-    else:
-        rows.append(_row(step, f"PVC {req['pvc_name']}", "todo", f"demo-up creates {req['size']} {req['access_mode']}"))
     return {"rows": rows, "action": "none"}
+
+
+# ---- workload requests (from the serveguard.openshift_ai collection) ----------------------
+
+
+def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: collection {name, version, path}|None, defaults {var: value} from the collection's
+    role defaults, overrides {var: value} set by a scenario or -e.
+    req: collection, required [var], optional [var], names {key: var}.
+
+    Returns the effective workload requests (override, else collection default) under
+    "workload", keyed like req.names, so the platform checks never restate them."""
+    step = "workload"
+    rows = []
+    coll = raw.get("collection")
+    if not coll:
+        return {"rows": [_row(step, req["collection"], "fail",
+                              "collection not installed: ansible-galaxy collection install -r requirements-dev.yml "
+                              "(sibling ../serveguard) or -r requirements.yml (git)")],
+                "action": "none", "workload": {}}
+    rows.append(_row(step, req["collection"], "ok", f"{coll.get('version', '?')} at {coll.get('path', '?')}"))
+    defaults, overrides = raw.get("defaults") or {}, raw.get("overrides") or {}
+    workload: dict[str, Any] = {}
+    for key, var in (req.get("names") or {}).items():
+        if var in overrides:
+            workload[key] = overrides[var]
+            rows.append(_row(step, var, "ok", f"{overrides[var]} (override; passed to the collection)"))
+        elif var in defaults:
+            workload[key] = defaults[var]
+            if var in (req.get("required") or []):
+                rows.append(_row(step, var, "ok", f"{defaults[var]} (collection default)"))
+        elif var in (req.get("required") or []):
+            rows.append(_row(step, var, "fail", f"not in the collection's role defaults; update the serveguard checkout"))
+        else:
+            rows.append(_row(step, var, "warn", "not declared by the collection; the checks that need it are skipped"))
+    return {"rows": rows, "action": "none", "workload": workload}
 
 
 # ---- cluster capacity -------------------------------------------------------------------
@@ -833,131 +851,6 @@ def sg_eval_capacity(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
     return {"rows": rows, "action": "none"}
 
 
-# ---- demo -------------------------------------------------------------------------------
-
-_VERDICT = ("serveguard.io/adapter-digest", "serveguard.io/package-root", "serveguard.io/base-hash")
-
-
-def _isvc_gpu(isvc: dict[str, Any]) -> bool:
-    model = (((isvc.get("spec") or {}).get("predictor") or {}).get("model")) or {}
-    res = model.get("resources") or {}
-    return any("nvidia.com/gpu" in (res.get(k) or {}) for k in ("limits", "requests"))
-
-
-def sg_eval_demo(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: checkout, makefile_params [names], cluster_reachable, isvc|None, isvcs [ISVC in namespace].
-    req: namespace, isvc, accelerator, redeploy, predictor_cpu/memory, predictor_defaults, make_params."""
-    step = "demo"
-    rows = []
-    if not raw.get("checkout"):
-        rows.append(_row(step, "serveguard checkout", "fail",
-                         f"{req['integration_dir']}/Makefile not found; clone serveguard next to this repo or set serveguard_repo_dir"))
-    else:
-        rows.append(_row(step, "serveguard checkout", "ok", req["integration_dir"]))
-        params = set(raw.get("makefile_params") or [])
-        missing = [p for p in ("NAMESPACE", "ISVC", "ACCELERATOR", "VLLM_IMAGE", "MODEL", "MODEL_REVISION", "TIMEOUT") if p not in params]
-        if missing:
-            rows.append(_row(step, "Makefile parameters", "fail", "Makefile lacks " + ", ".join(missing) + "; update the serveguard checkout"))
-        cpu_p, mem_p = req["make_params"]["cpu"], req["make_params"]["memory"]
-        custom = (k8s_cpu(req["predictor_cpu"]) != k8s_cpu(req["predictor_defaults"]["cpu"])
-                  or k8s_bytes(req["predictor_memory"]) != k8s_bytes(req["predictor_defaults"]["memory"]))
-        if cpu_p in params and mem_p in params:
-            rows.append(_row(step, "predictor size", "ok", f"{req['predictor_cpu']} CPU / {req['predictor_memory']} via {cpu_p}/{mem_p}"))
-        elif custom:
-            rows.append(_row(step, "predictor size", "fail",
-                             f"Makefile has no {cpu_p}/{mem_p}; the predictor keeps the integration default "
-                             f"{req['predictor_defaults']['cpu']} CPU / {req['predictor_defaults']['memory']}. Update serveguard or reset serveguard_predictor_*"))
-        else:
-            rows.append(_row(step, "predictor size", "ok", f"integration default {req['predictor_cpu']} CPU / {req['predictor_memory']}"))
-    if not raw.get("cluster_reachable"):
-        rows.append(_row(step, "InferenceService", "n/a", "cluster not reachable yet"))
-        return {"rows": rows, "action": "none" if _blocking(rows) else "deploy"}
-
-    isvc = raw.get("isvc")
-    leftovers = [i["metadata"]["name"] for i in raw.get("isvcs") or [] if i["metadata"]["name"].startswith("story-")]
-    if leftovers:
-        rows.append(_row(step, "story leftovers", "warn", f"{', '.join(leftovers)} exist: a refusal story was accepted earlier"))
-    action = "deploy"
-    if isvc is None:
-        rows.append(_row(step, "InferenceService", "todo", f"demo-up creates {req['namespace']}/{req['isvc']}"))
-    else:
-        ann = _annotations(isvc)
-        admitted = ann.get("serveguard.io/admitted") == "true" and all(ann.get(k) for k in _VERDICT)
-        ready = _condition_true(isvc, "Ready")
-        wrong_accel = _isvc_gpu(isvc) != (req["accelerator"] == "nvidia")
-        if req.get("redeploy"):
-            rows.append(_row(step, "InferenceService", "override", "serveguard_redeploy=true: publish and admit again"))
-        elif not ann.get("serveguard.io/admitted"):
-            rows.append(_row(step, "InferenceService", "conflict",
-                             f"{req['isvc']} exists without a ServeGuard verdict; it was not created by the receiver. Delete it or use another serveguard_namespace"))
-        elif wrong_accel:
-            rows.append(_row(step, "InferenceService", "conflict",
-                             f"{req['isvc']} was admitted for the other accelerator; run the teardown for that scenario or set serveguard_redeploy=true"))
-        elif admitted and ready:
-            rows.append(_row(step, "InferenceService", "satisfied", f"{req['isvc']} admitted and Ready"))
-            action = "satisfied"
-        else:
-            rows.append(_row(step, "InferenceService", "conflict",
-                             f"{req['isvc']} admitted={ann.get('serveguard.io/admitted')} Ready={ready}. A story may have left the adapter tampered: "
-                             f"make -C {req['integration_dir']} story-restore NAMESPACE={req['namespace']}, or set serveguard_redeploy=true"))
-    return {"rows": rows, "action": "none" if _blocking(rows) else action}
-
-
-def sg_eval_demo_post(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: isvc, vap, binding, pods [predictor pods]. Postcondition of demo-up (and of the stories)."""
-    step = "demo"
-    rows = []
-    isvc = raw.get("isvc")
-    ann = _annotations(isvc)
-    if isvc is None:
-        rows.append(_row(step, "InferenceService", "fail", f"{req['namespace']}/{req['isvc']} not found"))
-    else:
-        missing = [k for k in ("serveguard.io/admitted",) + _VERDICT if not ann.get(k)]
-        if ann.get("serveguard.io/admitted") != "true" or missing:
-            rows.append(_row(step, "verdict", "fail", "missing/false: " + ", ".join(missing or ["serveguard.io/admitted"])))
-        else:
-            rows.append(_row(step, "verdict", "ok", f"adapter-digest {ann['serveguard.io/adapter-digest'][:12]}"))
-        if _condition_true(isvc, "Ready"):
-            rows.append(_row(step, "InferenceService Ready", "ok", req["isvc"]))
-        else:
-            bad = [f"{c.get('type')}={c.get('status')} {c.get('reason', '')}".strip()
-                   for c in _conditions(isvc) if c.get("status") != "True"]
-            rows.append(_row(step, "InferenceService Ready", "fail", "; ".join(bad)[:200] or "no conditions"))
-        if req.get("expect_digest") and ann.get("serveguard.io/adapter-digest") != req["expect_digest"]:
-            rows.append(_row(step, "verdict unchanged", "fail",
-                             f"adapter-digest changed {req['expect_digest'][:12]} -> {ann.get('serveguard.io/adapter-digest', '')[:12]}"))
-        elif req.get("expect_digest"):
-            rows.append(_row(step, "verdict unchanged", "ok", "same adapter-digest as before the stories"))
-    for kind in ("vap", "binding"):
-        label = "ValidatingAdmissionPolicy" if kind == "vap" else "ValidatingAdmissionPolicyBinding"
-        rows.append(_row(step, label, "ok" if raw.get(kind) else "fail",
-                         f"serveguard-admitted-adapters-{req['namespace']}" + ("" if raw.get(kind) else " not found")))
-    pods = raw.get("pods") or []
-    running = [p for p in pods if (p.get("status") or {}).get("phase") == "Running"
-               and all(cs.get("ready") for cs in (p.get("status") or {}).get("containerStatuses") or [])]
-    guard_ok = any(
-        ((ic.get("state") or {}).get("terminated") or {}).get("exitCode") == 0
-        for p in running for ic in (p.get("status") or {}).get("initContainerStatuses") or []
-        if ic.get("name") == "serveguard-guard"
-    )
-    if running and guard_ok:
-        rows.append(_row(step, "predictor pod", "ok", f"{running[0]['metadata']['name']} Running, guard exited 0"))
-    else:
-        states = [f"{p['metadata']['name']}: {(p.get('status') or {}).get('phase')}" for p in pods]
-        rows.append(_row(step, "predictor pod", "fail", "; ".join(states) or "no predictor pod"))
-    if req.get("refused_names") is not None:
-        accepted = [i["metadata"]["name"] for i in raw.get("isvcs") or [] if i["metadata"]["name"] in req["refused_names"]]
-        rows.append(_row(step, "refused services absent", "fail" if accepted else "ok",
-                         ("exist although refused: " + ", ".join(accepted)) if accepted else ", ".join(req["refused_names"])))
-        jobs = {j["metadata"]["name"]: j for j in raw.get("jobs") or []}
-        for name in req.get("refused_jobs") or []:
-            job = jobs.get(name)
-            failed = job is not None and _condition_true(job, "Failed")
-            rows.append(_row(step, f"Job {name}", "ok" if failed else "fail",
-                             "Failed (receiver refused)" if failed else ("absent" if job is None else "did not fail")))
-    return {"rows": rows, "action": "none"}
-
-
 def sg_command_results(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """A looped command's registered results -> {label: {"rc", "out", "json"}}.
 
@@ -1022,6 +915,41 @@ def sg_merge_rows(existing: list[dict[str, str]], new: list[dict[str, str]]) -> 
     return out
 
 
+def sg_collection_location(listing: dict[str, Any], name: str) -> dict[str, str] | None:
+    """`ansible-galaxy collection list <name> --format json` -> {name, version, path}
+    of the first (highest-precedence) install."""
+    for root, collections in (listing or {}).items():
+        if name in (collections or {}):
+            ns, coll = name.split(".", 1)
+            return {"name": name, "version": collections[name].get("version", "?"), "path": f"{root}/{ns}/{coll}"}
+    return None
+
+
+def sg_merge_dicts(dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for d in dicts or []:
+        out.update(d)
+    return out
+
+
+def sg_defined_vars(names: list[str], variables: dict[str, Any]) -> dict[str, Any]:
+    """The subset of names set anywhere above role defaults (scenario, -e, inventory)."""
+    return {n: variables[n] for n in names if n in variables}
+
+
+def sg_story_failures(results: list[dict[str, Any]]) -> list[str]:
+    return [r["story"] for r in results or [] if r.get("verdict") != r.get("expected")]
+
+
+def sg_story_lines(result: dict[str, Any]) -> list[str]:
+    """One story -> banner lines: verdict, story, then the reason indented."""
+    mark = "" if result.get("verdict") == result.get("expected") else f"  (expected {result.get('expected')})"
+    lines = [f"  {str(result.get('verdict')):<12} {result.get('story')}{mark}"]
+    if result.get("reason"):
+        lines.append(f"  {'':<12} {str(result['reason'])[:110]}")
+    return lines
+
+
 def serveguard_row(row: dict[str, str]) -> str:
     return f"{row['step'][:21]:<21} {row['check'][:38]:<38} {row['status'].upper():<9} {row['detail']}"
 
@@ -1030,6 +958,11 @@ class FilterModule:
     def filters(self) -> dict[str, Any]:
         return {
             "serveguard_row": serveguard_row,
+            "sg_story_failures": sg_story_failures,
+            "sg_story_lines": sg_story_lines,
+            "sg_collection_location": sg_collection_location,
+            "sg_merge_dicts": sg_merge_dicts,
+            "sg_defined_vars": sg_defined_vars,
             "sg_merge_rows": sg_merge_rows,
             "sg_command_results": sg_command_results,
             "sg_rc_ok": sg_rc_ok,
@@ -1054,6 +987,5 @@ class FilterModule:
             "sg_eval_registry": sg_eval_registry,
             "sg_eval_storage": sg_eval_storage,
             "sg_eval_capacity": sg_eval_capacity,
-            "sg_eval_demo": sg_eval_demo,
-            "sg_eval_demo_post": sg_eval_demo_post,
+            "sg_eval_workload": sg_eval_workload,
         }

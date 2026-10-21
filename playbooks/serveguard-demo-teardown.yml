@@ -16,10 +16,9 @@
   roles:
     - role: login
   tasks:
-    - name: Remove the ServeGuard demo
+    - name: Remove the ServeGuard workload
       ansible.builtin.include_role:
-        name: serveguard_demo
-        tasks_from: teardown
+        name: serveguard.openshift_ai.teardown
 
     - name: Remove the platform and the serving pool
       when: teardown_platform | default(true) | bool

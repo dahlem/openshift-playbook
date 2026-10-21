@@ -1,10 +1,11 @@
 ---
 # ServeGuard on OpenShift AI, end to end: ROSA HCP cluster, a serving pool,
-# cert-manager + RHOAI (KServe standard only), then the serveguard integration's
-# `make demo-up` and `make demo-stories`. The integration's `make env-up` is not
-# used: this playbook owns the platform.
+# cert-manager + RHOAI (KServe standard only), then the ServeGuard workload from
+# the serveguard.openshift_ai collection (preflight -> receiver_image -> publish ->
+# admit -> serve -> stories). This playbook owns the platform; the collection owns
+# the workload.
 #
-# Every step is guarded (roles/serveguard_checks): its preconditions are checked
+# Every platform step is guarded (roles/serveguard_checks): its preconditions are checked
 # first, a step whose end state already holds is skipped ("SATISFIED"), a
 # conflicting existing resource stops the run before anything is changed, and
 # the postconditions are checked with bounded waits and diagnostics.
@@ -16,7 +17,7 @@
 #
 # Options:
 #   -e rhoai_channel=stable-3.6                 # RHOAI 3.6 once GA (+ serveguard_allow_channel_change=true on a 3.5 install)
-#   -e serveguard_repo_dir=/path/to/serveguard  # default: ../serveguard (sibling checkout)
+#   -e serveguard_predictor_cpu=6 -e serveguard_predictor_memory=12Gi  # override the collection default
 #   -e serveguard_run_stories=false             # stop after the admitted service is Ready
 
 - name: ServeGuard demo (cluster + platform + demo)

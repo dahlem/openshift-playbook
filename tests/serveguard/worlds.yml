@@ -7,8 +7,6 @@ _local_ok:
     aws: { rc: 0, out: "aws-cli/2.31.8" }
     oc: { rc: 0, out: "Client Version: 4.20.0" }
     ocm: { rc: 0, out: "1.0.10" }
-    make: { rc: 0, out: "GNU Make 3.81" }
-    uv: { rc: 0, out: "uv 0.9.5" }
   python_modules: { kubernetes: true, jmespath: true }
 _aws_ok:
   identity: "{{ fx['aws-identity'] }}"
@@ -27,6 +25,19 @@ _quota_ok:
   quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
   instances: []
 _unreachable_op: { cluster_reachable: false }
+_workload_stub:
+  collection: { name: serveguard.openshift_ai, version: 0.0.0-stub, path: /stub/serveguard/openshift_ai }
+  defaults:
+    serveguard_predictor_cpu: "4"
+    serveguard_predictor_memory: 8Gi
+    serveguard_guard_resources: { cpu: 500m, memory: 1Gi }
+    serveguard_build_resources: { cpu: "2", memory: 4Gi }
+    serveguard_job_resources: { cpu: 500m, memory: 1Gi }
+    serveguard_namespace: serveguard-demo
+    serveguard_image: ""
+    serveguard_storage_class: ""
+    serveguard_store_access_mode: ReadWriteOnce
+  overrides: {}
 _ready_pod:
   metadata: { name: serveguard-demo-predictor-abc, namespace: serveguard-demo }
   spec: { nodeName: ip-10-0-1-3, containers: [{ name: c, resources: { requests: { cpu: "4", memory: 8Gi } } }] }
@@ -45,7 +56,7 @@ worlds:
     registry: { cluster_reachable: false }
     storage: { cluster_reachable: false }
     capacity: { cluster_reachable: false }
-    demo: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: false, isvcs: [], isvc: null }
+    workload: "{{ _workload_stub }}"
 
   all_satisfied:
     local: "{{ _local_ok }}"
@@ -62,10 +73,9 @@ worlds:
           subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
     platform: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-ready'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
     registry: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
-    storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
+    storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
     capacity: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: ["{{ _ready_pod }}"] }
-    demo: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-            isvcs: ["{{ fx['isvc-admitted-ready'] }}"], isvc: "{{ fx['isvc-admitted-ready'] }}" }
+    workload: "{{ _workload_stub }}"
 
   mistral_cluster:   # an existing Knative/Mistral install on an old cluster
     local: "{{ _local_ok }}"
@@ -80,6 +90,6 @@ worlds:
           subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
     platform: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
     registry: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
-    storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
+    storage: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
     capacity: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
-    demo: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true, isvcs: [], isvc: null }
+    workload: "{{ _workload_stub }}"

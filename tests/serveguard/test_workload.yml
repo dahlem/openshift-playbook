@@ -1,0 +1,110 @@
+---
+# Offline: the workload half of the ServeGuard playbooks against a stub
+# serveguard.openshift_ai collection (fixtures/collections, found through
+# ANSIBLE_COLLECTIONS_PATH as an installed collection would be).
+#
+#   - pre_workload finds the collection with ansible-galaxy and reads the
+#     workload requests from its role defaults (no numbers restated here);
+#   - an override (-e serveguard_predictor_cpu=...) wins for both the checks
+#     and the collection's roles (run.sh runs this play twice);
+#   - includes/serveguard-demo-workload.yml calls the roles in order and builds
+#     the banner from serveguard_stories_result; a story not as expected fails.
+- name: ServeGuard workload wiring (offline, stub collection)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    serveguard_accelerator: cpu
+    expect_cpu: "4"
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
+
+    - name: Read the workload requests from the collection
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+      vars:
+        serveguard_checks_mode: enforce
+
+    - name: The checks use the collection's defaults (or the override)
+      ansible.builtin.assert:
+        that:
+          - _sg_raw_workload.collection.version == '0.0.0-stub'
+          - _sg_workload.predictor_cpu == expect_cpu
+          - _sg_workload.predictor_memory == '8Gi'
+          - _sg_workload.build_resources.cpu == '2' and _sg_workload.build_resources.memory == '4Gi'
+          - _sg_workload.job_resources.cpu == '500m'
+          - _sg_workload.namespace == 'serveguard-demo'
+          - _sg_workload.receiver_image == ''
+        fail_msg: "{{ _sg_workload | to_json }}"
+
+    - name: The serving-pool plan check sizes from those requests
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: _evaluate_quota.yml }
+      vars:
+        serveguard_checks_mode: report
+        serveguard_pool_instance_type: m6i.2xlarge
+        _sg_cluster: { action: satisfied }
+        _sg_pool: { action: satisfied }
+        _sg_raw_quota:
+          az: us-east-1a
+          offered: [m5.2xlarge, m6i.2xlarge]
+          rosa_types: [m5.2xlarge, m6i.2xlarge]
+          specs: { m5.2xlarge: { vcpus: 8, memory_mib: 32768 }, m6i.2xlarge: { vcpus: 8, memory_mib: 32768 } }
+          quotas: {}
+          instances: []
+
+    - name: Plan check reflects the effective predictor size
+      ansible.builtin.assert:
+        that: >-
+          _sg_result.rows | selectattr('check', 'equalto', 'm6i.2xlarge holds predictor+Job')
+          | map(attribute='detail') | first is search('vs ' ~ ((expect_cpu | int) + 0.5) ~ ' CPU')
+        fail_msg: "{{ _sg_result.rows | to_json }}"
+
+    - name: Run the workload include
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+
+    - name: Roles ran in order; the predictor size reached the collection
+      ansible.builtin.assert:
+        that:
+          - stub_calls == ['preflight', 'receiver_image', 'publish', 'admit', 'serve', 'stories']
+          - stub_seen_predictor.cpu == expect_cpu
+          - _sg_story_failures == []
+        fail_msg: "{{ stub_calls }} {{ stub_seen_predictor }}"
+
+    - name: A story not as expected fails after the banner
+      block:
+        - name: Banner over a failed refusal
+          ansible.builtin.include_role: { name: serveguard_checks, tasks_from: stories_banner }
+          vars:
+            serveguard_stories_result:
+              - { story: admitted adapter serves, expected: served, verdict: served, reason: "" }
+              - { story: forged verdict, expected: refused, verdict: accepted, reason: "the policy admitted it" }
+        - name: Not reached
+          ansible.builtin.fail: { msg: "banner did not fail" }
+      rescue:
+        - name: Failure names the story
+          ansible.builtin.assert:
+            that:
+              - "'Not as expected: forged verdict' in ansible_failed_result.msg"
+              - _sg_story_failures == ['forged verdict']
+
+    - name: The banner still prints when the stories role itself fails
+      block:
+        - name: Run the workload with a failing stories role
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_stories_role_fails: true
+        - name: Not reached
+          ansible.builtin.fail: { msg: "workload did not fail" }
+      rescue:
+        - name: The stories role's failure propagates, the banner ran first
+          ansible.builtin.assert:
+            that:
+              - "'stub stories role failed' in ansible_failed_result.msg"
+              - _sg_story_failures == []
+
+    - name: Teardown role resolves
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.teardown
+
+    - name: Teardown was called
+      ansible.builtin.assert:
+        that: stub_calls[-1] == 'teardown'

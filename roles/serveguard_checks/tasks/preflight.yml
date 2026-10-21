@@ -1,8 +1,11 @@
 ---
-# Every precondition, read-only, in deploy order; then the table.
+# Every platform precondition, read-only, in deploy order (print with report.yml). The
+# workload's own preconditions are the collection's preflight role.
 # Used by playbooks/serveguard-demo-preflight.yml (serveguard_checks_mode: report).
 - name: Local tools
   ansible.builtin.include_tasks: pre_local.yml
+- name: Workload requests (serveguard.openshift_ai defaults)
+  ansible.builtin.include_tasks: pre_workload.yml
 - name: AWS account
   ansible.builtin.include_tasks: pre_aws.yml
 - name: Cluster
@@ -24,7 +27,3 @@
   ansible.builtin.include_tasks: pre_storage.yml
 - name: Capacity
   ansible.builtin.include_tasks: pre_capacity.yml
-- name: Demo
-  ansible.builtin.include_tasks: pre_demo.yml
-- name: Table
-  ansible.builtin.include_tasks: report.yml

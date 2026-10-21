@@ -8,6 +8,8 @@ cd "$repo"
 # The test inventory has no vault; do not require .vault_pass.
 export ANSIBLE_CONFIG="$here/ansible.cfg"
 export ANSIBLE_ROLES_PATH="$repo/roles"
+# A stub serveguard.openshift_ai collection stands in for the real one.
+export ANSIBLE_COLLECTIONS_PATH="$here/fixtures/collections"
 log="${TMPDIR:-/tmp}/serveguard-tests.log"
 run() {
   if ansible-playbook -i "$here/inventory" "$here/$1" -e versions_file="$repo/versions.yml" "${@:2}" >"$log" 2>&1; then
@@ -19,7 +21,8 @@ run() {
 run test_checks.yml
 run test_preflight.yml
 run test_identity.yml
-run test_stories.yml -e serveguard_repo_dir="$here/stub" -e serveguard_log_dir="${TMPDIR:-/tmp}/serveguard-test-logs"
+run test_workload.yml
+run test_workload.yml -e serveguard_predictor_cpu=6 -e expect_cpu=6
 echo "== syntax-check"
 # With the repository's own ansible.cfg and inventory, as a user runs them.
 for p in playbooks/*.yml; do

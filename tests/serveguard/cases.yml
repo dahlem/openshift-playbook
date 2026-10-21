@@ -6,7 +6,39 @@
 #   status   {check: status} for the rows named
 #   blocking whether any row is fail/conflict (the step would stop)
 #   detail   substrings that must appear in some row's detail
+# `workload` overrides entries of _sg_workload, which otherwise holds what
+# pre_workload read from the stub collection's role defaults.
 cases:
+  # ---- workload requests (serveguard.openshift_ai role defaults) ----------------------
+  - name: collection defaults are the requests
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_resources: { cpu: 500m, memory: 1Gi } }
+      overrides: {}
+    expect: { blocking: false, status: { serveguard_predictor_cpu: ok, serveguard_build_resources: warn }, detail: ["4 (collection default)"] }
+
+  - name: a scenario override wins and is reported as passed through
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi }
+      overrides: { serveguard_predictor_cpu: "6" }
+    expect: { blocking: false, detail: ["6 (override; passed to the collection)"] }
+
+  - name: collection not installed -> fail with the install command
+    step: workload
+    raw: { collection: null, defaults: {}, overrides: {} }
+    expect: { blocking: true, status: { serveguard.openshift_ai: fail }, detail: ["requirements-dev.yml"] }
+
+  - name: collection without the predictor defaults -> fail
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.0.1", path: /c/serveguard/openshift_ai }
+      defaults: {}
+      overrides: {}
+    expect: { blocking: true, status: { serveguard_predictor_cpu: fail, serveguard_predictor_memory: fail } }
+
   # ---- local tools -------------------------------------------------------------------
   - name: local tools present and new enough
     step: local
@@ -17,12 +49,10 @@ cases:
         aws: { rc: 0, out: "aws-cli/2.31.8 Python/3.13.7 Darwin/25.6.0" }
         oc: { rc: 0, out: "Client Version: 4.20.0\nKustomize Version: v5.6.0" }
         ocm: { rc: 0, out: "1.0.10" }
-        make: { rc: 0, out: "GNU Make 3.81" }
-        uv: { rc: 0, out: "uv 0.9.5 (Homebrew 2025-10-21)" }
       python_modules: { kubernetes: true, jmespath: true }
     expect: { blocking: false, status: { rosa: ok, oc: ok, ansible_core: ok } }
 
-  - name: old oc and missing uv block
+  - name: old oc, old ansible-core and missing ocm block
     step: local
     raw:
       ansible_core: "2.14.1"
@@ -30,13 +60,11 @@ cases:
         rosa: { rc: 0, out: "1.2.62" }
         aws: { rc: 0, out: "aws-cli/2.31.8" }
         oc: { rc: 0, out: "Client Version: 4.16.3" }
-        ocm: { rc: 0, out: "1.0.10" }
-        make: { rc: 0, out: "GNU Make 4.4" }
-        uv: { rc: 127, out: "sh: uv: command not found" }
+        ocm: { rc: 127, out: "sh: ocm: command not found" }
       python_modules: { kubernetes: false, jmespath: true }
     expect:
       blocking: true
-      status: { oc: fail, uv: fail, ansible_core: fail, "python: kubernetes": fail, rosa: ok }
+      status: { oc: fail, ocm: fail, ansible_core: fail, "python: kubernetes": fail, rosa: ok }
       detail: ["4.16.3 < required 4.19.0", "pip install kubernetes"]
 
   # ---- AWS account (bootstrap postcondition) --------------------------------------------
@@ -368,26 +396,26 @@ cases:
     raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
     expect: { blocking: true, status: { managementState: fail } }
 
-  - name: registry not needed with an external image
+  - name: registry not needed with an external receiver image
     step: registry
-    vars: { serveguard_image: "quay.io/me/serveguard-receiver:1" }
+    workload: { receiver_image: "quay.io/me/serveguard-receiver:1" }
     raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
     expect: { blocking: false, status: { "internal registry": n/a } }
 
-  - name: default gp3 StorageClass, no PVC yet
+  - name: default gp3 StorageClass
     step: storage
-    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
-    expect: { blocking: false, status: { StorageClass: ok, "PVC serveguard-store": todo } }
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
+    expect: { blocking: false, status: { StorageClass: ok } }
 
-  - name: no default StorageClass, undersized existing PVC
+  - name: no default StorageClass
     step: storage
-    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-no-default'] }}", pvc: "{{ fx['pvc-small'] }}" }
-    expect: { blocking: true, status: { StorageClass: fail, "PVC serveguard-store": conflict }, detail: ["capacity 1Gi < 5Gi"] }
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-no-default'] }}" }
+    expect: { blocking: true, status: { StorageClass: fail }, detail: ["no default StorageClass"] }
 
-  - name: ReadWriteMany on EBS -> fail
+  - name: ReadWriteMany (collection setting) on EBS -> fail
     step: storage
-    vars: { serveguard_store_access_mode: ReadWriteMany }
-    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
+    workload: { store_access_mode: ReadWriteMany }
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
     expect: { blocking: true, status: { StorageClass: fail }, detail: ["cannot provide ReadWriteMany"] }
 
   # ---- capacity --------------------------------------------------------------------------------
@@ -424,9 +452,9 @@ cases:
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
     expect: { blocking: true, status: { "predictor (+guard init)": fail } }
 
-  - name: bigger predictor from the single variable no longer fits
+  - name: bigger predictor (override of the collection default) no longer fits
     step: capacity
-    vars: { serveguard_predictor_cpu: "7", serveguard_predictor_memory: 24Gi }
+    workload: { predictor_cpu: "7", predictor_memory: 24Gi }
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
     expect: { blocking: true, status: { "predictor + story Job": fail }, detail: ["no schedulable node has 7.5 CPU / 25.0Gi"] }
 
@@ -441,88 +469,3 @@ cases:
     vars: { serveguard_accelerator: nvidia }
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu'] }}", pods: [] }
     expect: { blocking: false, status: { "predictor (+guard init)": ok }, detail: ["fits on ip-10-0-2-1"] }
-
-  # ---- demo ---------------------------------------------------------------------------------------
-  - name: no InferenceService -> deploy
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true, isvcs: [], isvc: null }
-    expect: { action: deploy, blocking: false, status: { InferenceService: todo, "predictor size": ok } }
-
-  - name: admitted and Ready -> skip
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-           isvcs: ["{{ fx['isvc-admitted-ready'] }}"], isvc: "{{ fx['isvc-admitted-ready'] }}" }
-    expect: { action: satisfied, blocking: false, status: { InferenceService: satisfied } }
-
-  - name: admitted and Ready with redeploy -> deploy
-    step: demo
-    vars: { serveguard_redeploy: true }
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-           isvcs: ["{{ fx['isvc-admitted-ready'] }}"], isvc: "{{ fx['isvc-admitted-ready'] }}" }
-    expect: { action: deploy, blocking: false, status: { InferenceService: override } }
-
-  - name: admitted but not Ready (story 5 leftover) -> conflict with restore hint
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-           isvcs: ["{{ fx['isvc-admitted-notready'] }}"], isvc: "{{ fx['isvc-admitted-notready'] }}" }
-    expect: { action: none, blocking: true, detail: ["story-restore"] }
-
-  - name: same-named service without verdict -> conflict
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-           isvcs: ["{{ fx['isvc-foreign'] }}"], isvc: "{{ fx['isvc-foreign'] }}" }
-    expect: { action: none, blocking: true, detail: ["without a ServeGuard verdict"] }
-
-  - name: GPU-admitted service, CPU scenario -> conflict
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
-           isvcs: ["{{ fx['isvc-admitted-gpu'] }}"], isvc: "{{ fx['isvc-admitted-gpu'] }}" }
-    expect: { action: none, blocking: true, detail: ["admitted for the other accelerator"] }
-
-  - name: missing checkout -> fail
-    step: demo
-    raw: { checkout: false, makefile_params: [], cluster_reachable: false, isvcs: [], isvc: null }
-    expect: { action: none, blocking: true, status: { "serveguard checkout": fail } }
-
-  - name: custom predictor size, Makefile without the parameter -> fail
-    step: demo
-    vars: { serveguard_predictor_cpu: "6" }
-    raw: { checkout: true, makefile_params: "{{ mk_params | reject('match', 'PREDICTOR_') | list }}", cluster_reachable: true, isvcs: [], isvc: null }
-    expect: { action: none, blocking: true, status: { "predictor size": fail } }
-
-  - name: default predictor size, Makefile without the parameter -> ok
-    step: demo
-    raw: { checkout: true, makefile_params: "{{ mk_params | reject('match', 'PREDICTOR_') | list }}", cluster_reachable: true, isvcs: [], isvc: null }
-    expect: { action: deploy, blocking: false, status: { "predictor size": ok }, detail: ["integration default 4"] }
-
-  # ---- demo and story postconditions --------------------------------------------------------------------
-  - name: after demo-up - admitted, Ready, policy, guard exited 0
-    step: demo_post
-    raw:
-      isvc: "{{ fx['isvc-admitted-ready'] }}"
-      isvcs: ["{{ fx['isvc-admitted-ready'] }}"]
-      vap: true
-      binding: true
-      pods: [{ metadata: { name: serveguard-demo-predictor-abc }, status: { phase: Running, containerStatuses: [{ ready: true }],
-               initContainerStatuses: [{ name: serveguard-guard, state: { terminated: { exitCode: 0 } } }] } }]
-      jobs: []
-    expect: { blocking: false, status: { verdict: ok, "InferenceService Ready": ok, ValidatingAdmissionPolicy: ok, "predictor pod": ok } }
-
-  - name: after the stories - a refused service exists and the digest changed -> fail
-    step: demo_post
-    facts:
-      _sg_stories_digest: "aaaa"
-      _sg_refused_names: [story-unadmitted, story-forged-verdict, story-read-factor, story-certificate]
-      _sg_refused_jobs: [story-admit-read-factor]
-    raw:
-      isvc: "{{ fx['isvc-admitted-ready'] }}"
-      isvcs: ["{{ fx['isvc-admitted-ready'] }}", "{{ fx['isvc-story-leftover'] }}"]
-      vap: true
-      binding: false
-      pods: [{ metadata: { name: p }, status: { phase: Pending } }]
-      jobs: [{ metadata: { name: story-admit-read-factor }, status: { conditions: [{ type: Complete, status: "True" }] } }]
-    expect:
-      blocking: true
-      status: { "verdict unchanged": fail, "refused services absent": fail, ValidatingAdmissionPolicyBinding: fail,
-                "predictor pod": fail, "Job story-admit-read-factor": fail }
-      detail: ["exist although refused: story-forged-verdict", "did not fail"]

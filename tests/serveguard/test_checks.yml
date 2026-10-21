@@ -18,8 +18,6 @@
     operators_enabled: [cert_manager, rhoai]
     rhoai_channel: stable-3.5
     ai_platform_mode: standard
-    mk_params: [RHOAI_CHANNEL, NAMESPACE, ISVC, ACCELERATOR, VLLM_IMAGE, MODEL, MODEL_REVISION, TIMEOUT,
-                STORE_ACCESS_MODE, PREDICTOR_CPU, PREDICTOR_MEMORY]
     # Variables a case may override; reset to these before each case.
     _test_defaults:
       serveguard_allow_cluster_version: false
@@ -29,10 +27,6 @@
       serveguard_cluster_must_exist: false
       serveguard_redeploy: false
       serveguard_accelerator: cpu
-      serveguard_image: ""
-      serveguard_store_access_mode: ReadWriteOnce
-      serveguard_predictor_cpu: "4"
-      serveguard_predictor_memory: 8Gi
       serveguard_pool_instance_type: m6i.2xlarge
   tasks:
     - name: Load version constraints
@@ -46,6 +40,14 @@
       loop: "{{ query('fileglob', playbook_dir ~ '/fixtures/*.json') }}"
       loop_control:
         label: "{{ item | basename }}"
+
+    # The workload requests come from the (stub) collection, as in a real run.
+    - name: Read the workload requests from the stub collection
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+
+    - name: Keep them as the per-case baseline
+      ansible.builtin.set_fact:
+        _test_workload: "{{ _sg_workload }}"
 
     - name: Load cases
       ansible.builtin.include_vars:

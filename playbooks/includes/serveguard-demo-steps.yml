@@ -1,11 +1,15 @@
 ---
 # The guarded ServeGuard steps, shared by serveguard-demo.yml and
-# serveguard-demo-on-cluster.yml. Each step: pre (decide) -> role (only when
-# needed) -> post (verify).
+# serveguard-demo-on-cluster.yml. Platform steps: pre (decide) -> role (only when
+# needed) -> post (verify). The workload is the serveguard.openshift_ai collection
+# (serveguard-demo-workload.yml), which guards its own steps.
 
-# ---- local tools, AWS account, cluster, pool, quotas ---------------------------------
+# ---- local tools, workload requests, AWS account, cluster, pool, quotas -------------
 - name: Check local tools
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_local }
+
+- name: Read the workload requests from the serveguard collection
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
 
 - name: Check the AWS account (bootstrap output)
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_aws }
@@ -94,7 +98,7 @@
 - name: Verify the platform
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_platform }
 
-# ---- demo ---------------------------------------------------------------------------
+# ---- platform checks for the workload, then the workload ---------------------------
 - name: Check the internal image registry
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_registry }
 
@@ -104,30 +108,8 @@
 - name: Check cluster capacity for the demo
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_capacity }
 
-- name: Check the demo
-  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_demo }
-
-- name: Run make demo-up
-  ansible.builtin.include_role:
-    name: serveguard_demo
-  when: _sg_demo.action == 'deploy'
-
-- name: Verify the demo
-  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_demo }
-
-- name: Stories
-  when: serveguard_run_stories | bool
-  block:
-    - name: Check the admitted service before the stories
-      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_stories }
-
-    - name: Run make demo-stories
-      ansible.builtin.include_role:
-        name: serveguard_demo
-        tasks_from: stories
-
-    - name: Verify the stories
-      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_stories }
+- name: Run the ServeGuard workload (serveguard.openshift_ai)
+  ansible.builtin.include_tasks: serveguard-demo-workload.yml
 
 - name: Summary of all checks
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }

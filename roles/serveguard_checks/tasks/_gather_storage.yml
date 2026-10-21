@@ -6,17 +6,8 @@
   register: _sg_scs
   when: _sg_cluster_reachable | bool
 
-- name: Read the demo store PVC
-  kubernetes.core.k8s_info:
-    kind: PersistentVolumeClaim
-    namespace: "{{ serveguard_namespace }}"
-    name: serveguard-store
-  register: _sg_pvc
-  when: _sg_cluster_reachable | bool
-
 - name: Collect storage facts
   ansible.builtin.set_fact:
     _sg_raw_storage:
       cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
       storage_classes: "{{ _sg_scs.resources | default([]) }}"
-      pvc: "{{ _sg_pvc.resources | default([]) | first | default(none) }}"

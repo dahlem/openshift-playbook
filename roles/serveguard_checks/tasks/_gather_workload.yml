@@ -1,0 +1,33 @@
+---
+# Read-only, local: find the serveguard.openshift_ai collection and read its role
+# defaults, the single source of the workload's resource requests.
+
+- name: Find the serveguard collection
+  ansible.builtin.command: ansible-galaxy collection list {{ serveguard_collection }} --format json
+  register: _sg_coll_list
+  changed_when: false
+  failed_when: false
+
+- name: Locate the collection
+  ansible.builtin.set_fact:
+    _sg_coll: "{{ (_sg_coll_list.stdout | from_json) | sg_collection_location(serveguard_collection) if _sg_coll_list.rc == 0 else none }}"
+
+- name: Read the collection's role defaults
+  ansible.builtin.include_vars:
+    file: "{{ _sg_coll.path }}/roles/{{ item }}/defaults/main.yml"
+    name: "_sg_coll_defaults_{{ item }}"
+  loop: "{{ serveguard_collection_roles }}"
+  when:
+    - _sg_coll is not none
+    - (_sg_coll.path ~ '/roles/' ~ item ~ '/defaults/main.yml') is file
+
+- name: Collect workload facts
+  ansible.builtin.set_fact:
+    _sg_raw_workload:
+      collection: "{{ _sg_coll }}"
+      defaults: >-
+        {{ serveguard_collection_roles | map('regex_replace', '^', '_sg_coll_defaults_')
+           | map('extract', vars) | select('defined') | select('mapping') | list
+           | sg_merge_dicts }}
+      overrides: >-
+        {{ serveguard_workload_vars.values() | list | sg_defined_vars(vars) }}
