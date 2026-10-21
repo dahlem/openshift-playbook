@@ -18,7 +18,7 @@ under it and runs the collection's roles:
 | Operators | this repo (`operators`) | cert-manager, RHOAI (`rhods-operator`), and NFD + NVIDIA GPU for `gpu.yml` |
 | DataScienceCluster | this repo (`ai_platform`, `ai_platform_mode: standard`) | DSC v2, `kserve` Managed (NIM Removed), every other component Removed |
 | Registry, StorageClass, cluster capacity checks | this repo (`serveguard_checks`) | read-only; the workload's requests come from the collection's role defaults |
-| Workload | `serveguard.openshift_ai` roles `preflight` -> `receiver_image` -> `publish` -> `admit` -> `serve` -> `stories`; `teardown` | namespace, receiver build into the internal registry, publish, admit, serve, stories, each with its own pre/postconditions |
+| Workload | `serveguard.openshift_ai` roles `preflight` -> `trust_anchor` -> `receiver_image` -> `publisher` -> `public_verifier` -> `serving_consumer` -> `stories`; `teardown` | trust anchor, receiver build into the internal registry, publisher, public verifier (admission), serving consumer, stories, each with its own pre/postconditions |
 | Admission policy | `serveguard.openshift_ai` | `ValidatingAdmissionPolicy serveguard-admitted-adapters-<namespace>` |
 
 The playbooks never run the integration's environment setup (`make env-up`). Do not
@@ -86,7 +86,7 @@ Wall-clock time from an empty account, expected:
 | Serving pool node Ready | 5 to 10 min |
 | cert-manager + RHOAI + DSC Ready | 10 to 15 min |
 | GPU stack (NFD, driver build) - `gpu.yml` only | 10 to 20 min |
-| workload: receiver image build, publish, admit, serve (vLLM image pull) | 20 to 30 min |
+| workload: trust anchor, receiver image build, publisher, public verifier, serving consumer (vLLM image pull) | 20 to 30 min |
 | workload: stories | 10 to 15 min |
 | **Total** | **about 75 to 110 min** |
 
@@ -137,7 +137,14 @@ ansible-galaxy collection install -r requirements.yml       # includes serveguar
 
 `requirements.yml` installs `serveguard.openshift_ai` from
 `https://github.com/dahlem/serveguard.git#/integrations/openshift-ai/ansible`
-(branch `main`). To work against a local checkout instead:
+(branch `main`).
+
+> **Note:** the ServeGuard work currently lives on the serveguard branch
+> `satml-subliminal-revision`, which is not pushed. Until it is merged into
+> `main` and pushed, the git source does not contain the collection. Use the
+> local checkout:
+
+To work against a local checkout instead:
 
 ```bash
 git clone https://github.com/dahlem/serveguard.git ../serveguard   # sibling of openshift-playbook
@@ -237,9 +244,17 @@ Platform steps run as *pre → step → post* (`playbooks/includes/serveguard-de
    `Ready` with the required component states.
 8. The registry, StorageClass and capacity checks for the workload.
 9. The workload (`playbooks/includes/serveguard-demo-workload.yml`): the
-   collection roles `preflight` → `receiver_image` → `publish` → `admit` →
-   `serve` → `stories`. Each role checks its own pre- and postconditions, skips
-   what already holds and stops on conflicts. Variables a scenario or `-e` sets
+   collection roles, in the order of the paper's trust model: `preflight` →
+   `trust_anchor` → `receiver_image` → `publisher` → `public_verifier` →
+   `serving_consumer` → `stories`. Each role checks its own pre- and
+   postconditions, skips what already holds and stops on conflicts. The playbook
+   does not re-read the cluster for the demo. It asserts on the roles' results:
+   - after `serving_consumer`, `serveguard_serving_result` must be ready, with
+     `serveguard.io/admitted: "true"`, the adapter-digest, package-root and
+     base-hash annotations, and guard exit code 0;
+   - after `stories`, the same holds and the adapter digest is unchanged;
+   - every story's verdict must equal its expected verdict (the banner). The
+     refused services are among the stories. Variables a scenario or `-e` sets
    (`serveguard_predictor_cpu`, `serveguard_vllm_image`, ...) reach the roles;
    everything else is the collection's default.
 10. The story banner and the table of every platform check.
@@ -396,7 +411,7 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 | `serveguard_vllm_image` | `versions.serveguard.vllm_cpu_image` (scenario) | passed to the collection |
 | `serveguard_run_stories` | `true` | run the `stories` role |
 | `serveguard_predictor_cpu` / `serveguard_predictor_memory` | collection default (`"4"` / `8Gi`) | set only to override; the capacity checks follow |
-| `serveguard_namespace`, `serveguard_image`, `serveguard_storage_class`, `serveguard_store_access_mode`, `serveguard_*_resources` | collection defaults | read by the platform checks (`serveguard_workload_vars`); set only to override |
+| `serveguard_namespace`, `serveguard_image`, `serveguard_storage_class`, `serveguard_store_access_mode`, `serveguard_<workload>_cpu`/`_memory` (`receiver_build`, `job`, `guard`) | collection defaults | read by the platform checks (`serveguard_workload_vars`); set only to override |
 | `serveguard_allow_cluster_version` | `false` | accept a cluster outside 4.19.9 <= v < 4.23 |
 | `serveguard_allow_pool_mismatch` | `false` | use an existing pool whose spec differs, as is |
 | `serveguard_allow_channel_change` | `false` | move an existing Subscription to the requested channel |
@@ -432,10 +447,13 @@ These were not observable offline:
 - **The `serveguard.openshift_ai` collection.** It does not exist yet. This
   repository is written against its announced interface and tested against a
   stub:
-  - roles `preflight`, `receiver_image`, `publish`, `admit`, `serve`, `stories`,
-    `teardown`;
-  - `serveguard_predictor_cpu`/`_memory` in role defaults;
+  - roles `preflight`, `trust_anchor`, `receiver_image`, `publisher`,
+    `public_verifier`, `serving_consumer`, `stories`, `teardown`;
+  - `serveguard_predictor_cpu`/`_memory` in role defaults, and the other
+    workloads as `serveguard_<workload>_cpu`/`_memory`;
   - `serveguard_stories_result` = `[{story, expected, verdict, reason}]`;
+  - `serveguard_serving_result` = `{inference_service, ready, guard_exit_code,
+    annotations}` (an assumption of this repository, still to be agreed);
   - the optional names in `serveguard_workload_vars` (`config.yml`).
 
   Reconcile those names, and the git subdirectory in `requirements.yml`, when it

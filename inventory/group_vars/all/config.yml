@@ -64,13 +64,14 @@ batch_workflow_operator_channel: stable
 batch_workflow_namespace: batch-experiments
 
 # ServeGuard OpenShift AI demo (playbooks/serveguard-demo*.yml, scenarios/serveguard/)
-# The workload (receiver image, publish, admit, serve, stories) is the
+# The workload (trust anchor, receiver image, publisher, public verifier, serving
+# consumer, stories; the paper's trust model) is the
 # serveguard.openshift_ai collection; its role defaults are the single source of
 # the workload's settings and resource requests. Nothing here restates them: the
 # platform checks read them from the collection (serveguard_checks pre_workload),
 # and a scenario or -e that sets one of these variables overrides it for both.
 serveguard_collection: serveguard.openshift_ai
-serveguard_collection_roles: [preflight, receiver_image, publish, admit, serve, stories, teardown]
+serveguard_collection_roles: [preflight, trust_anchor, receiver_image, publisher, public_verifier, serving_consumer, stories, teardown]
 # Workload variables the platform checks need -> their names in the collection.
 serveguard_workload_vars:
   predictor_cpu: serveguard_predictor_cpu            # collection default "4"
@@ -79,9 +80,13 @@ serveguard_workload_vars:
   receiver_image: serveguard_image                   # "" = in-cluster build -> internal registry
   storage_class: serveguard_storage_class            # "" = the cluster default
   store_access_mode: serveguard_store_access_mode
-  build_resources: serveguard_build_resources        # {cpu, memory} of the receiver build
-  job_resources: serveguard_job_resources            # {cpu, memory} of the receiver Jobs
-  guard_resources: serveguard_guard_resources        # {cpu, memory} of the guard init-container
+  # Other workloads: serveguard_<workload>_cpu / _memory
+  build_cpu: serveguard_receiver_build_cpu           # receiver image build
+  build_memory: serveguard_receiver_build_memory
+  job_cpu: serveguard_job_cpu                        # publisher / verifier / story Jobs
+  job_memory: serveguard_job_memory
+  guard_cpu: serveguard_guard_cpu                    # guard init-container of the predictor
+  guard_memory: serveguard_guard_memory
 # These must be in the collection's defaults (or overridden); the rest are optional.
 serveguard_workload_required: [predictor_cpu, predictor_memory]
 serveguard_run_stories: true

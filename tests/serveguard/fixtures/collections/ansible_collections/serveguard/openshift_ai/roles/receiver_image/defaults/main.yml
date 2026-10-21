@@ -1,0 +1,4 @@
+---
+serveguard_image: ""
+serveguard_receiver_build_cpu: "2"
+serveguard_receiver_build_memory: 4Gi

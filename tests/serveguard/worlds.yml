@@ -30,9 +30,12 @@ _workload_stub:
   defaults:
     serveguard_predictor_cpu: "4"
     serveguard_predictor_memory: 8Gi
-    serveguard_guard_resources: { cpu: 500m, memory: 1Gi }
-    serveguard_build_resources: { cpu: "2", memory: 4Gi }
-    serveguard_job_resources: { cpu: 500m, memory: 1Gi }
+    serveguard_guard_cpu: 500m
+    serveguard_guard_memory: 1Gi
+    serveguard_receiver_build_cpu: "2"
+    serveguard_receiver_build_memory: 4Gi
+    serveguard_job_cpu: 500m
+    serveguard_job_memory: 1Gi
     serveguard_namespace: serveguard-demo
     serveguard_image: ""
     serveguard_storage_class: ""

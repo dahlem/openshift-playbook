@@ -22,11 +22,10 @@
            'node_overhead': serveguard_node_overhead,
            'accelerator': serveguard_accelerator }) }}
   vars:
-    # Predictor + one Job, from the collection's defaults (pre_workload)
-    _sg_job: "{{ _sg_workload.job_resources | default({'cpu': 0, 'memory': 0}) }}"
-    _sg_serving_demand:
-      cpu: "{{ (_sg_workload.predictor_cpu | k8s_cpu) + (_sg_job.cpu | k8s_cpu) }}m"
-      memory: "{{ (_sg_workload.predictor_memory | k8s_bytes) + (_sg_job.memory | k8s_bytes) }}"
+    # Predictor + one co-located Job, from the collection's defaults (pre_workload)
+    _sg_serving_demand: >-
+      {{ (_sg_workload | sg_workload_demands(serveguard_accelerator, '0'))
+         | selectattr('name', 'equalto', 'predictor + story Job') | first }}
 
 - name: Quota check without workload requests
   ansible.builtin.set_fact:

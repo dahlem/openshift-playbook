@@ -1,0 +1,10 @@
+---
+stub_stories:
+  - { story: admitted adapter serves, expected: served, verdict: served, reason: "completion: a platform for building" }
+  - { story: unadmitted InferenceService, expected: refused, verdict: refused, reason: "denied: adapter must be admitted by ServeGuard" }
+  - { story: forged verdict, expected: refused, verdict: refused, reason: "denied: only the ServeGuard receiver may create" }
+  - { story: tampered read factor, expected: refused, verdict: refused, reason: "layer 0: served (A, C, rho) do not open the commitment" }
+  - { story: recommitted package, expected: refused, verdict: refused, reason: "package root does not match trusted identity" }
+  - { story: bytes changed after admission, expected: refused, verdict: refused, reason: "adapter bytes differ from the admitted adapter digest" }
+  - { story: restore, expected: restored, verdict: restored, reason: "" }
+stub_digest_after_stories: 28266fff00

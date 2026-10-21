@@ -1,9 +1,9 @@
 ---
 # ServeGuard on OpenShift AI, end to end: ROSA HCP cluster, a serving pool,
 # cert-manager + RHOAI (KServe standard only), then the ServeGuard workload from
-# the serveguard.openshift_ai collection (preflight -> receiver_image -> publish ->
-# admit -> serve -> stories). This playbook owns the platform; the collection owns
-# the workload.
+# the serveguard.openshift_ai collection (preflight -> trust_anchor -> receiver_image
+# -> publisher -> public_verifier -> serving_consumer -> stories). This playbook owns
+# the platform; the collection owns the workload.
 #
 # Every platform step is guarded (roles/serveguard_checks): its preconditions are checked
 # first, a step whose end state already holds is skipped ("SATISFIED"), a

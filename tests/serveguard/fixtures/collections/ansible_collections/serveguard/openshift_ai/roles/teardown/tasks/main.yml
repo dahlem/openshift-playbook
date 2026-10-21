@@ -1,0 +1,4 @@
+---
+- name: "stub teardown: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['teardown'] }}"

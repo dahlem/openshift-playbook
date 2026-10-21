@@ -782,6 +782,33 @@ def _pod_requests(pod: dict[str, Any]) -> dict[str, int]:
     return main
 
 
+def sg_workload_demands(w: dict[str, Any], accelerator: str, min_ephemeral: str) -> list[dict[str, Any]]:
+    """Effective workload requests (pre_workload) -> capacity demands.
+
+    The predictor pod's request is max(predictor, guard init-container); story Jobs
+    co-locate with the predictor (ReadWriteOnce store), so that sum is a demand too.
+    A workload without both its _cpu and _memory is left out."""
+    def pair(prefix: str) -> tuple[int, int] | None:
+        cpu, mem = w.get(f"{prefix}_cpu"), w.get(f"{prefix}_memory")
+        return (k8s_cpu(cpu), k8s_bytes(mem)) if cpu is not None and mem is not None else None
+
+    gpu = 1 if accelerator == "nvidia" else 0
+    pred, guard, job, build = pair("predictor"), pair("guard"), pair("job"), pair("build")
+    out = []
+    if build and not w.get("receiver_image"):
+        out.append({"name": "receiver build", "cpu": f"{build[0]}m", "memory": build[1]})
+    if job:
+        out.append({"name": "receiver Job", "cpu": f"{job[0]}m", "memory": job[1]})
+    if pred:
+        cpu, mem = max(pred[0], guard[0] if guard else 0), max(pred[1], guard[1] if guard else 0)
+        out.append({"name": "predictor (+guard init)", "cpu": f"{cpu}m", "memory": mem, "gpu": gpu,
+                    "min_ephemeral": min_ephemeral})
+        jc, jm = job if job else (0, 0)
+        out.append({"name": "predictor + story Job", "cpu": f"{cpu + jc}m", "memory": mem + jm, "gpu": gpu,
+                    "min_ephemeral": min_ephemeral})
+    return out
+
+
 def sg_node_free(nodes: list[dict[str, Any]], pods: list[dict[str, Any]], exclude_namespaces: list[str] | None = None) -> list[dict[str, Any]]:
     """Free requests per node. Pods in exclude_namespaces are ignored (the demo's own pods,
     which a redeploy replaces)."""
@@ -975,6 +1002,7 @@ class FilterModule:
             "sg_cli_version": cli_version,
             "sg_version_in_range": version_in_range,
             "sg_node_free": sg_node_free,
+            "sg_workload_demands": sg_workload_demands,
             "sg_eval_local": sg_eval_local,
             "sg_eval_aws": sg_eval_aws,
             "sg_eval_quota": sg_eval_quota,

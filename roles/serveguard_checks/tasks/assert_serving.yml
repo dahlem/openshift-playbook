@@ -1,0 +1,36 @@
+---
+# The demo-level postcondition of the serving_consumer role, asserted on its
+# result rather than re-read from the cluster. Interface (to reconcile with the
+# collection): serveguard_serving_result =
+#   {inference_service, ready, guard_exit_code,
+#    annotations: {serveguard.io/admitted, /adapter-digest, /package-root, /base-hash}}
+# With _sg_digest_before set (after the stories), the adapter digest must be unchanged.
+
+- name: Assert the serving consumer's result
+  ansible.builtin.assert:
+    that:
+      - serveguard_serving_result is defined
+      - serveguard_serving_result.ready | default(false) | bool
+      - (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('') == 'true'
+      - _sg_verdict_missing | length == 0
+      - serveguard_serving_result.guard_exit_code | default(-1) | int == 0
+      - _sg_digest_before | default('') | length == 0 or _sg_digest_now == _sg_digest_before
+    fail_msg: >-
+      ServeGuard serving postcondition failed for
+      {{ serveguard_serving_result.inference_service | default('the InferenceService') }}:
+      ready={{ serveguard_serving_result.ready | default('undefined') }},
+      admitted={{ (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('absent') }},
+      missing verdict annotations={{ _sg_verdict_missing }},
+      guard exit={{ serveguard_serving_result.guard_exit_code | default('undefined') }}
+      {{ ', adapter digest changed ' ~ _sg_digest_before ~ ' -> ' ~ _sg_digest_now
+         if (_sg_digest_before | default('') | length > 0 and _sg_digest_now != _sg_digest_before) else '' }}
+  vars:
+    _sg_verdict_missing: >-
+      {{ ['serveguard.io/adapter-digest', 'serveguard.io/package-root', 'serveguard.io/base-hash']
+         | reject('in', (serveguard_serving_result.annotations | default({})) | dict2items
+                        | rejectattr('value', 'falsy') | map(attribute='key') | list) | list }}
+    _sg_digest_now: "{{ (serveguard_serving_result.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}"
+
+- name: Remember the admitted adapter digest
+  ansible.builtin.set_fact:
+    _sg_admitted_digest: "{{ serveguard_serving_result.annotations['serveguard.io/adapter-digest'] }}"

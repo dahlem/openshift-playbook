@@ -150,9 +150,10 @@ playbooks. They install RHOAI 3.x with **only KServe in standard (RawDeployment)
 mode**, plus cert-manager, its only dependency. There is no Serverless or Service
 Mesh. The playbooks then run the workload from the `serveguard.openshift_ai`
 collection (`requirements.yml`, or `requirements-dev.yml` for a sibling
-`../serveguard` checkout). The collection's roles are `preflight`,
-`receiver_image`, `publish`, `admit`, `serve` and `stories`, and the playbooks
-print each story's verdict:
+`../serveguard` checkout). Use `requirements-dev.yml` until the serveguard branch
+`satml-subliminal-revision` is merged and pushed. The collection's roles are
+`preflight`, `trust_anchor`, `receiver_image`, `publisher`, `public_verifier`,
+`serving_consumer` and `stories`, and the playbooks print each story's verdict:
 
 ```bash
 ansible-galaxy collection install -r requirements.yml          # or -r requirements-dev.yml --force

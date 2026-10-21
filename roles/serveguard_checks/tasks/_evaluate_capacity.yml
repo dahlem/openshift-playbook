@@ -1,34 +1,16 @@
 ---
 # Requests the workload places on the cluster, read from the
-# serveguard.openshift_ai collection's role defaults (pre_workload -> _sg_workload),
-# checked against free allocatable on Ready, untainted nodes. The demo
-# namespace's own pods are not counted as used (a redeploy replaces them).
+# serveguard.openshift_ai collection's role defaults (pre_workload -> _sg_workload,
+# serveguard_<workload>_cpu/_memory), checked against free allocatable on Ready,
+# untainted nodes. A workload whose pair is missing is left out (pre_workload
+# warned). The demo namespace's own pods are not counted as used.
 - name: Evaluate cluster capacity
   ansible.builtin.set_fact:
     _sg_result: >-
       {{ _sg_raw_capacity | sg_eval_capacity({
            'namespace': _sg_workload.namespace | default('serveguard-demo'),
            'pool_pending': (_sg_pool.action | default('satisfied')) in ['create', 'wait'],
-           'demands': _sg_demands }) }}
-  vars:
-    _sg_gpu: "{{ 1 if serveguard_accelerator == 'nvidia' else 0 }}"
-    _sg_zero: { cpu: "0", memory: "0" }
-    _sg_job: "{{ _sg_workload.job_resources | default(_sg_zero) }}"
-    _sg_guard: "{{ _sg_workload.guard_resources | default(_sg_zero) }}"
-    _sg_pred_cpu: "{{ [_sg_workload.predictor_cpu | k8s_cpu, _sg_guard.cpu | k8s_cpu] | max }}"
-    _sg_pred_mem: "{{ [_sg_workload.predictor_memory | k8s_bytes, _sg_guard.memory | k8s_bytes] | max }}"
-    _sg_in_cluster_build: "{{ (_sg_workload.receiver_image | default('')) | length == 0 }}"
-    _sg_demands: >-
-      {{ ([{'name': 'receiver build', 'cpu': _sg_workload.build_resources.cpu,
-            'memory': _sg_workload.build_resources.memory}]
-          if (_sg_in_cluster_build | bool and _sg_workload.build_resources is defined) else [])
-         + ([{'name': 'receiver Job', 'cpu': _sg_job.cpu, 'memory': _sg_job.memory}]
-            if _sg_workload.job_resources is defined else [])
-         + [{'name': 'predictor (+guard init)', 'cpu': _sg_pred_cpu ~ 'm', 'memory': _sg_pred_mem,
-             'gpu': _sg_gpu, 'min_ephemeral': serveguard_min_node_ephemeral},
-            {'name': 'predictor + story Job', 'cpu': ((_sg_pred_cpu | int) + (_sg_job.cpu | k8s_cpu)) ~ 'm',
-             'memory': (_sg_pred_mem | int) + (_sg_job.memory | k8s_bytes),
-             'gpu': _sg_gpu, 'min_ephemeral': serveguard_min_node_ephemeral}] }}
+           'demands': _sg_workload | sg_workload_demands(serveguard_accelerator, serveguard_min_node_ephemeral) }) }}
   when: _sg_workload.predictor_cpu is defined and _sg_workload.predictor_memory is defined
 
 - name: Capacity check without workload requests

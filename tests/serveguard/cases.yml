@@ -14,9 +14,9 @@ cases:
     step: workload
     raw:
       collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
-      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_resources: { cpu: 500m, memory: 1Gi } }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_cpu: 500m, serveguard_job_memory: 1Gi }
       overrides: {}
-    expect: { blocking: false, status: { serveguard_predictor_cpu: ok, serveguard_build_resources: warn }, detail: ["4 (collection default)"] }
+    expect: { blocking: false, status: { serveguard_predictor_cpu: ok, serveguard_receiver_build_cpu: warn }, detail: ["4 (collection default)"] }
 
   - name: a scenario override wins and is reported as passed through
     step: workload

@@ -1,0 +1,15 @@
+---
+- name: "stub stories: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['stories'] }}"
+
+- name: "stub stories: publish the structured result and the service after the stories"
+  ansible.builtin.set_fact:
+    serveguard_stories_result: "{{ stub_stories }}"
+    serveguard_serving_result: >-
+      {{ serveguard_serving_result | combine({'annotations': {'serveguard.io/adapter-digest': stub_digest_after_stories}}, recursive=True) }}
+
+- name: "stub stories: fail like the real role when asked"
+  ansible.builtin.fail:
+    msg: "stub stories role failed"
+  when: stub_stories_role_fails | default(false) | bool

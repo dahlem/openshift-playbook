@@ -1,0 +1,10 @@
+---
+# Single source of the predictor's requests (= limits) and its guard init-container.
+serveguard_predictor_cpu: "4"
+serveguard_predictor_memory: 8Gi
+serveguard_guard_cpu: 500m
+serveguard_guard_memory: 1Gi
+serveguard_namespace: serveguard-demo
+# Stub knobs
+stub_serving_ready: true
+stub_guard_exit: 0

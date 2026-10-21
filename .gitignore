@@ -16,3 +16,4 @@ clusters/*.yml
 profiles/*.yml
 !profiles/example.yml
 
+!tests/serveguard/fixtures/collections/

@@ -30,8 +30,9 @@
           - _sg_raw_workload.collection.version == '0.0.0-stub'
           - _sg_workload.predictor_cpu == expect_cpu
           - _sg_workload.predictor_memory == '8Gi'
-          - _sg_workload.build_resources.cpu == '2' and _sg_workload.build_resources.memory == '4Gi'
-          - _sg_workload.job_resources.cpu == '500m'
+          - _sg_workload.build_cpu == '2' and _sg_workload.build_memory == '4Gi'
+          - _sg_workload.job_cpu == '500m' and _sg_workload.job_memory == '1Gi'
+          - _sg_workload.guard_cpu == '500m'
           - _sg_workload.namespace == 'serveguard-demo'
           - _sg_workload.receiver_image == ''
         fail_msg: "{{ _sg_workload | to_json }}"
@@ -64,7 +65,10 @@
     - name: Roles ran in order; the predictor size reached the collection
       ansible.builtin.assert:
         that:
-          - stub_calls == ['preflight', 'receiver_image', 'publish', 'admit', 'serve', 'stories']
+          - >-
+            stub_calls == ['preflight', 'trust_anchor', 'receiver_image', 'publisher',
+                           'public_verifier', 'serving_consumer', 'stories']
+          - _sg_admitted_digest == '28266fff00'
           - stub_seen_predictor.cpu == expect_cpu
           - _sg_story_failures == []
         fail_msg: "{{ stub_calls }} {{ stub_seen_predictor }}"
@@ -99,6 +103,34 @@
           ansible.builtin.assert:
             that:
               - "'stub stories role failed' in ansible_failed_result.msg"
+              - _sg_story_failures == []
+
+    - name: A serving result with a failed guard fails the workload
+      block:
+        - name: Run the workload with the guard exiting 1
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_guard_exit: 1
+        - name: Not reached
+          ansible.builtin.fail: { msg: "guard exit 1 was not caught" }
+      rescue:
+        - name: The serving assertion names the guard
+          ansible.builtin.assert:
+            that: "'guard exit=1' in ansible_failed_result.msg"
+
+    - name: An adapter digest changed by the stories fails, and the banner still prints
+      block:
+        - name: Run the workload with the digest changing during the stories
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_digest_after_stories: "0000"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "digest change was not caught" }
+      rescue:
+        - name: The digest assertion fired
+          ansible.builtin.assert:
+            that:
+              - "'adapter digest changed 28266fff00 -> 0000' in ansible_failed_result.msg"
               - _sg_story_failures == []
 
     - name: Teardown role resolves
