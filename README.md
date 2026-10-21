@@ -153,11 +153,17 @@ Mesh. The playbooks then run the serveguard repository's `make demo-up` and
 
 ```bash
 # serveguard checked out next to this repo (../serveguard)
+ansible-playbook playbooks/serveguard-demo-preflight.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass  # read-only table
 ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass   # or gpu.yml
 ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
 ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass  # -e teardown_cluster=true
 # RHOAI 3.6 once GA: add -e rhoai_channel=stable-3.6 after the scenario file
 ```
+
+Every step checks its preconditions first. A step whose end state already holds
+is skipped. A conflicting existing resource stops the run before anything changes.
+Resource requirements (quotas, AZ offerings, allocatable CPU/memory/GPU, storage,
+registry) are checked too.
 
 Budget about $2.60/h (CPU) or $3.20/h (GPU), and 75 to 110 minutes from an empty
 account. Prerequisites, the exact sequence, the expected output and the 3.6
@@ -360,6 +366,7 @@ model
 | `model` | ServingRuntime + InferenceService, wait for Ready |
 | `llm_d` | Disaggregated prefill/decode via Helm (llm-d) |
 | `serveguard_demo` | ServeGuard demo via the serveguard Makefile (`demo-up`, `demo-stories`, `demo-down`) |
+| `serveguard_checks` | ServeGuard pre/postconditions, skip/conflict decisions, resource checks, preflight table |
 
 ## Design
 

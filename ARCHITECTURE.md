@@ -300,6 +300,18 @@ add an entry to both files and list its key in a scenario's `operators_enabled`.
 is a new set of those three files plus an entry in `ai_platform_api_versions`.
 See `scenarios/serveguard/*.yml` for a scenario that uses both.
 
+### Guarded Steps (ServeGuard playbooks)
+
+The ServeGuard playbooks wrap each shared role in `roles/serveguard_checks`:
+`pre_<step>.yml` reads the state (`_gather_<step>.yml`, read-only), decides
+(`_evaluate_<step>.yml`), and records rows. The playbook runs the role only when
+the decision asks for it, then runs `post_<step>.yml`. The decisions are pure
+Python filters (`filter_plugins/serveguard_checks.py`) over the gathered JSON, so
+`tests/serveguard/` can test skip, conflict and insufficient-resource outcomes
+offline with fixtures. The shared roles gained only inert hooks, unset by default:
+`operators_subset`, `operators_existing_operator_groups` and
+`operators_apply_channel_change`.
+
 ### Adding a New Scenario
 
 Create `scenarios/my-scenario.yml`:

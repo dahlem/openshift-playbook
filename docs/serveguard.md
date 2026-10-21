@@ -24,10 +24,12 @@ cluster this playbook installed: it would add a second `OperatorGroup` in
 `redhat-ods-operator` and `cert-manager-operator`, and OLM refuses a namespace with
 two `OperatorGroup`s.
 
-> **Status: validated offline only.** The playbooks pass `ansible-playbook
-> --syntax-check`, and the operator resolution and story summary were tested
-> offline. Nothing here has run against a cluster yet. The output shown below is
-> the *expected* form. See [What to confirm on the first run](#what-to-confirm-on-the-first-run).
+> **Status: validated offline only.** All playbooks pass `ansible-playbook
+> --syntax-check`. `tests/serveguard/run.sh` runs the check decisions on fixture
+> JSON, the preflight sequence over whole-account fixtures, the Mistral identity
+> check and the story summary. Nothing here has run against a cluster or an AWS
+> account yet, so the output shown below is the *expected* form. See
+> [What to confirm on the first run](#what-to-confirm-on-the-first-run).
 
 ## Scenarios
 
@@ -170,7 +172,21 @@ This finds the OIDC config, the HCP account roles and a subnet pair, then writes
 `inventory/group_vars/all/site.yml`. It prompts when there is more than one
 candidate.
 
-### 5. Deploy
+### 5. Preflight (read-only)
+
+```bash
+ansible-playbook playbooks/serveguard-demo-preflight.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+```
+
+This runs every precondition below against the account and, if it exists, the
+cluster. It prints one table and changes nothing: no cluster, pool, admin user,
+operator or namespace is created. Cluster-side rows show `N/A` until the cluster
+exists and `oc` is logged in to it. The playbook exits non-zero if any row is
+`FAIL` or `CONFLICT`. Fix those rows, re-run until it says `Ready to deploy`, then
+deploy. See [Safety](#safety-preconditions-postconditions-and-skips) for what
+each status means.
+
+### 6. Deploy
 
 ```bash
 # CPU (default)
@@ -180,41 +196,40 @@ ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml 
 ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
 ```
 
-The playbook runs these roles in order:
+Each step runs as *pre → step → post* (`playbooks/includes/serveguard-demo-steps.yml`):
 
-1. `login`: AWS, OCM, ROSA, then `oc` as `cluster-admin`. On the first run it
-   creates the admin, once the cluster exists.
-2. `rosa_cluster`: creates the HCP cluster (OpenShift `versions.cluster.openshift_version`)
-   and waits for it to be `ready`.
+1. `login`, then the read-only checks: local tools, the AWS account, cluster,
+   serving pool, and quotas/instance types.
+2. `rosa_cluster` creates the HCP cluster (OpenShift `versions.cluster.openshift_version`),
+   only if it is absent or still installing. `login` then logs `oc` in.
 3. `cluster_access`: OCM role grants (`profiles/`).
-4. `gpu_machinepool`, run with the serving pool's variables: `sg-cpu` (`m6i.2xlarge`)
-   or `sg-gpu` (`g6.2xlarge`), 1 node, no taint. It waits for the node to be Ready.
-5. `operators` with `operators_enabled: [cert_manager, rhoai]`
-   (`gpu.yml`: `[cert_manager, nfd, gpu, rhoai]`). Before subscribing, it checks
-   that the requested channels exist in the catalog.
-6. `gpu_stack` (`gpu.yml` only): NFD instance, ClusterPolicy, waits for allocatable `nvidia.com/gpu`.
-7. `ai_platform` with `ai_platform_mode: standard`: waits for the cert-manager
-   webhook and the RHOAI CSV. It waits for the operator's `default-dsci`, and
-   creates one only if the operator has not. It applies the DSC v2 and waits for
-   `kserve-controller-manager` and for the DSC to be `Ready`.
-8. `serveguard_demo`: checks the checkout, `make`/`uv`, KServe CRDs, the internal
-   registry (`Managed`) and a default StorageClass. Then it runs `make demo-up`
-   with `NAMESPACE`, `ISVC`, `ACCELERATOR`, `VLLM_IMAGE`, `MODEL`,
-   `MODEL_REVISION`, `RHOAI_CHANNEL` and `TIMEOUT`. It asserts that the
-   `InferenceService` is Ready with `serveguard.io/admitted: "true"` and that the
-   policy exists.
-9. `serveguard_demo` stories: runs `make demo-stories`, saves the full output
-   under `logs/`, and prints the summary.
+4. `gpu_machinepool` runs with the serving pool's variables: `sg-cpu`
+   (`m6i.2xlarge`) or `sg-gpu` (`g6.2xlarge`), 1 node, no taint. It runs only if
+   the pool is absent or has no Ready node yet.
+5. `operators` runs only for the operators that are not yet `Succeeded` on the
+   requested channel: `[cert_manager, rhoai]`, plus `nfd` and `gpu` for `gpu.yml`.
+6. `gpu_stack` (`gpu.yml` only): NFD instance and ClusterPolicy, unless
+   `nvidia.com/gpu` is already allocatable.
+7. `ai_platform` with `ai_platform_mode: standard`. It waits for the cert-manager
+   webhook and the RHOAI CSV, then for the operator's `default-dsci`, and creates
+   one only if the operator has not. It applies the DSC v2 unless it is already
+   `Ready` with the required component states.
+8. The registry, storage and capacity checks, then `serveguard_demo`. That role
+   runs `make demo-up` with `NAMESPACE`, `ISVC`, `ACCELERATOR`, `VLLM_IMAGE`,
+   `MODEL`, `MODEL_REVISION`, `RHOAI_CHANNEL` and `TIMEOUT`, plus
+   `PREDICTOR_CPU`/`PREDICTOR_MEMORY` once the Makefile declares them. It is
+   skipped if the admitted service is already Ready.
+9. The story preconditions, `make demo-stories` (full output under `logs/`, then
+   the summary), and the story postconditions.
+10. The table of every check.
 
-Every step is idempotent. A re-run skips the cluster, pool, operators and DSC if
-they already hold. It also skips `demo-up` if the admitted service is Ready. Pass
-`-e serveguard_redeploy=true` to publish and admit again. Pass
-`-e serveguard_run_stories=false` to stop before the stories.
+Pass `-e serveguard_redeploy=true` to publish and admit again, or
+`-e serveguard_run_stories=false` to stop before the stories. If you already have
+a ROSA HCP cluster, use the same command with
+`playbooks/serveguard-demo-on-cluster.yml`. It never creates a cluster: a missing
+one is a `FAIL`.
 
-If you already have a ROSA HCP cluster, use the same command with
-`playbooks/serveguard-demo-on-cluster.yml`.
-
-### 6. Expected output
+### 7. Expected output
 
 Not yet observed on a cluster. The form comes from the roles' banners.
 
@@ -266,7 +281,7 @@ apply that is accepted, or a Job that does not fail, stops `make` with a non-zer
 code. The playbook then prints `FAILED (make rc=N)` and the last lines, and fails.
 For what each story proves, read the serveguard chapter.
 
-### 7. Teardown
+### 8. Teardown
 
 ```bash
 # Demo + platform + serving pool (keeps the cluster)
@@ -287,6 +302,50 @@ account resources afterwards, delete the network stack (`rosa create network`
 printed its CloudFormation stack name), the OIDC config (`rosa delete oidc-config`)
 and the account roles (`rosa delete account-roles --mode auto`).
 
+## Safety: preconditions, postconditions and skips
+
+Every step is guarded by `roles/serveguard_checks`. Before a step it reads the
+current state, read-only (`rosa describe`, `aws ... describe/get`, `oc get`). It
+then decides one of:
+
+| Status | Meaning | Effect |
+|--------|---------|--------|
+| `OK` | a precondition holds | continue |
+| `SATISFIED` | the step's end state already holds | **the step is skipped** ("already satisfied") |
+| `TODO` | missing | the step creates it |
+| `WAIT` | exists and is converging | the step re-applies nothing new and waits |
+| `OVERRIDE` | conflicting, accepted by an `serveguard_allow_*` variable | as documented per row |
+| `N/A` | cannot be checked yet (an earlier step has not run) | checked again when the step is reached |
+| `WARN` | worth reading | continue |
+| `CONFLICT` | exists in a state the step would have to change or break | **stop before changing anything** |
+| `FAIL` | a precondition does not hold | **stop before changing anything** |
+
+After a step, its postcondition waits a bounded time, then re-reads the state and
+requires `SATISFIED`. On timeout it prints read-only diagnostics (conditions,
+events, CSV phase, logs) and fails. The step is safe to re-run once the cause is
+fixed. The deploy stops at the first blocking row. The preflight reports all rows.
+
+| Step | Precondition (fails or conflicts when ...) | Skipped when | Postcondition (bounded wait, diagnostics) |
+|------|-------------------------------------------|--------------|---------------------------------------------|
+| local | `rosa` >= 1.2.60, `aws` >= 2, `oc` >= 4.19, `ansible-core` >= 2.15, `uv`, `make`, `ocm` missing/old; Python `kubernetes`/`jmespath` not importable | - | - |
+| AWS account (bootstrap output) | no AWS session or ROSA login; site.yml incomplete; OIDC config, installer/support/worker roles or ELB service-linked role missing; subnets missing or in different VPCs; < 8 free subnet tags | - | - |
+| quotas | instance type not offered in the private subnet's AZ or not ROSA-supported; Standard (`L-1216C47A`) or G/VT (`L-DB2E81BA`) vCPU quota minus running vCPUs < vCPUs this run adds (2 workers if the cluster is new + the serving pool if new); serving type cannot hold predictor + one Job (vCPU/memory minus `serveguard_node_overhead`); `nvidia` on a non-GPU type | - | - |
+| cluster | exists but ROSA classic, other region, state `error`/`uninstalling`, or OpenShift outside 4.19.9 <= v < 4.23 (`serveguard_allow_cluster_version`); on-cluster playbook: absent | `ready` at a supported version | `ready` (`cluster_wait_timeout`), oc logged in to its API; diag: `rosa describe`, `rosa logs install` |
+| serving pool | exists with another instance type, replicas/autoscaling, taints, labels or subnet (`serveguard_allow_pool_mismatch` uses it as is) | exists as specified with a Ready node | a Ready node of the type (`node_wait_timeout`); diag: pool status, nodes, node events |
+| operators (each) | package or channel not in the catalog; package subscribed elsewhere; 2+ OperatorGroups in the namespace; an OperatorGroup with another target mode; Subscription on another channel (`serveguard_allow_channel_change`) or another package/source; CSV `Failed` | Subscription on the requested channel and CSV `Succeeded` (a compatible foreign OperatorGroup is reused, never duplicated) | installedCSV set and `Succeeded` (`crd_wait_timeout`); diag: OperatorGroup/Subscription/InstallPlan/CSV, Subscription conditions, CSV reason, warning events |
+| GPU stack (gpu.yml) | no Ready GPU node | `nvidia.com/gpu` allocatable and ClusterPolicy `ready` | `nvidia.com/gpu` allocatable (20 min); diag: ClusterPolicy status, non-running operator pods, events |
+| DSCI / DSC | DSC CRD missing; 2+ DSCIs or a DSCI not named `default-dsci`; a DSC under another name; `default-dsc` with other component states, e.g. a Knative install with the dashboard Managed (`serveguard_allow_dsc_update`) | `default-dsc` `Ready`, kserve Managed, NIM and the 16 others Removed, KServe controller ready | DSC `Ready` (20 min); diag: DSC status, DSCI phase, RHOAI CSV, deployments, non-running pods, events, cert-manager pods |
+| internal registry | not `Managed`, no storage, no ready `image-registry` (n/a with `serveguard_image`) | - | - |
+| storage | no (or the named) StorageClass; no dynamic provisioner; ReadWriteMany on EBS; existing `serveguard-store` PVC smaller than `serveguard_store_size`, wrong access mode or not Bound | - | - |
+| capacity | no Ready, untainted, schedulable node has free requests (allocatable minus running pods, init containers counted) for: receiver build 2 CPU/4Gi, a Job 0.5/1Gi, the predictor (`serveguard_predictor_*`, + 1 GPU for nvidia, `serveguard_min_node_ephemeral` 30Gi), predictor + a co-located story Job. Reported `N/A` while the serving pool is still to be created | - | - |
+| demo | no checkout or Makefile parameters; custom predictor size but the Makefile has no `PREDICTOR_*`; `serveguard-demo` exists without a verdict, admitted for the other accelerator, or admitted but not Ready (hint: `make story-restore`); `serveguard_redeploy` overrides | admitted and Ready | ISVC Ready (10 min), verdict annotations, VAP + binding, predictor Running with guard exit 0; diag: ISVC conditions, pods/jobs, guard and admit logs, events |
+| stories | admitted service unhealthy; `story-*` leftovers | - | `make` rc 0; none of the four refused services exists; both refused admit Jobs `Failed`; the service is Ready with the **same** adapter digest as before |
+
+The decisions are in `roles/serveguard_checks/filter_plugins/serveguard_checks.py`,
+as pure functions of what was read. `tests/serveguard/run.sh` runs them offline
+on fixture JSON: 68 decision cases, 3 whole-account worlds through the preflight
+sequence, the Mistral identity check and the story summary.
+
 ## Switching to RHOAI 3.6
 
 RHOAI 3.6 is not GA as of 2026-10-21. The channel is one variable:
@@ -299,12 +358,14 @@ ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml 
 Put `-e rhoai_channel=...` after the scenario file, so it wins. To make 3.6 the
 default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 
-- The `operators` role first checks the channel against the cluster's
-  `rhods-operator` PackageManifest and fails with the list of available channels.
-  You can also list them yourself: `make -C ../serveguard/integrations/openshift-ai channels`.
-- On a cluster that runs 3.5, the role sees that the Subscription's channel
-  differs and re-applies it. OLM then upgrades in place (install plan approval
-  `Automatic`).
+- The preflight and the operators precondition check the channel against the
+  cluster's `rhods-operator` PackageManifest. If it is missing, they fail with the
+  list of available channels. You can also list them yourself:
+  `make -C ../serveguard/integrations/openshift-ai channels`.
+- A cluster that already runs 3.5 has its Subscription on `stable-3.5`. That is a
+  `CONFLICT`: the playbook stops and changes nothing. To upgrade in place, add
+  `-e serveguard_allow_channel_change=true`. The Subscription is then re-applied
+  on the new channel, and OLM upgrades it (install plan approval `Automatic`).
 - Use the CPU/CUDA image that the Red Hat AI supported-configurations page lists
   for 3.6: `-e serveguard_vllm_image=registry.redhat.io/rhaii/vllm-cpu-rhel9:<3.6 tag>`
   (or update `versions.yml`).
@@ -319,7 +380,6 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 |----------|-------------------|---------|
 | `rhoai_channel` | `versions.serveguard.rhoai_channel` (`stable-3.5`) | RHOAI Subscription channel |
 | `operators_enabled` | `[cert_manager, rhoai]` | operators to install, in order |
-| `operators_validate_channels` | `true` | fail before subscribing if a channel is not in the catalog |
 | `ai_platform_mode` | `standard` | DSC v2, KServe standard only |
 | `ai_platform_standard_removed` | 16 components | DSC components set `Removed` |
 | `serveguard_accelerator` | `cpu` (`nvidia` in gpu.yml) | Makefile `ACCELERATOR` |
@@ -331,6 +391,14 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 | `serveguard_repo_dir` | `../serveguard` | serveguard checkout |
 | `serveguard_redeploy` | `false` | re-run `demo-up` even if admitted and Ready |
 | `serveguard_run_stories` | `true` | run `demo-stories` |
+| `serveguard_predictor_cpu` / `serveguard_predictor_memory` | `"4"` / `8Gi` | predictor requests: capacity checks and Makefile `PREDICTOR_CPU`/`PREDICTOR_MEMORY` |
+| `serveguard_store_size` / `serveguard_store_access_mode` | `5Gi` / `ReadWriteOnce` | store PVC, for the storage check |
+| `serveguard_allow_cluster_version` | `false` | accept a cluster outside 4.19.9 <= v < 4.23 |
+| `serveguard_allow_pool_mismatch` | `false` | use an existing pool whose spec differs, as is |
+| `serveguard_allow_channel_change` | `false` | move an existing Subscription to the requested channel |
+| `serveguard_allow_dsc_update` | `false` | change component states of an existing DSC |
+
+All `serveguard_*` defaults live in `inventory/group_vars/all/config.yml`.
 
 ## What to confirm on the first run
 
