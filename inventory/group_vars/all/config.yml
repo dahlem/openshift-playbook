@@ -10,8 +10,6 @@ versions_file: "{{ playbook_dir }}/../versions.yml"
 # Scenarios override the list (serveguard: cert_manager + rhoai, optionally nfd + gpu).
 operators_enabled: [nfd, gpu, serverless, servicemesh, rhoai]
 rhoai_channel: "{{ versions.operators.rhoai.channel }}"
-# Fail before subscribing if a requested channel is not in the catalog.
-operators_validate_channels: false
 
 # AI platform — serverless: DSC v1, KServe on Knative + Service Mesh (Mistral scenarios)
 #               standard:   DSC v2, KServe standard (RawDeployment) only (RHOAI 3.x)
@@ -64,3 +62,41 @@ batch_model_cache_provider: huggingface
 batch_model_cache_token_secret: ""
 batch_workflow_operator_channel: stable
 batch_workflow_namespace: batch-experiments
+
+# ServeGuard OpenShift AI demo (playbooks/serveguard-demo*.yml, scenarios/serveguard/)
+# Shared by the serveguard_checks and serveguard_demo roles.
+serveguard_repo_dir: "{{ playbook_dir }}/../../serveguard"     # sibling checkout
+serveguard_integration_dir: "{{ serveguard_repo_dir }}/integrations/openshift-ai"
+serveguard_namespace: serveguard-demo
+serveguard_isvc: serveguard-demo
+serveguard_accelerator: cpu                  # cpu | nvidia   (Makefile ACCELERATOR)
+serveguard_vllm_image: "{{ versions.serveguard.vllm_cpu_image }}"
+serveguard_model: "{{ versions.serveguard.model }}"
+serveguard_model_revision: "{{ versions.serveguard.model_revision }}"
+serveguard_image: ""                         # receiver image; "" = in-cluster build -> internal registry
+serveguard_storage_class: ""                 # "" = the cluster's default StorageClass
+serveguard_store_size: 5Gi                   # integration default (store PVC)
+serveguard_store_access_mode: ReadWriteOnce
+serveguard_make_timeout: 20m                 # per wait inside the Makefile (TIMEOUT)
+# Predictor requests (= limits). One value for the playbook's capacity checks and
+# the Makefile; passed as PREDICTOR_CPU / PREDICTOR_MEMORY when the Makefile declares them.
+serveguard_predictor_cpu: "4"
+serveguard_predictor_memory: 8Gi
+serveguard_make_param_predictor_cpu: PREDICTOR_CPU
+serveguard_make_param_predictor_memory: PREDICTOR_MEMORY
+# Demo pods the capacity check also accounts for (integration demo.py):
+serveguard_build_resources: { cpu: "2", memory: 4Gi }      # receiver BuildConfig (limits = requests)
+serveguard_job_resources: { cpu: 500m, memory: 1Gi }       # fetch/publish/admit/story Jobs
+serveguard_guard_resources: { cpu: 500m, memory: 1Gi }     # guard init-container
+serveguard_min_node_ephemeral: 30Gi          # vLLM image + model on the predictor's node
+# Estimated per-node system reservation + daemonsets, for the plan check before
+# the cluster or pool exists (OpenShift reserves CPU/memory on every node).
+serveguard_node_overhead: { cpu: 1500m, memory: 4Gi }
+serveguard_redeploy: false                   # re-run demo-up although admitted and Ready
+serveguard_run_stories: true
+serveguard_log_dir: "{{ playbook_dir }}/../logs"
+# Overrides: accept a conflicting existing resource instead of stopping.
+serveguard_allow_cluster_version: false      # cluster outside the supported OpenShift range
+serveguard_allow_pool_mismatch: false        # use an existing pool whose spec differs
+serveguard_allow_channel_change: false       # move an existing Subscription to the requested channel
+serveguard_allow_dsc_update: false           # change component states of an existing DSC

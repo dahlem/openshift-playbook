@@ -9,6 +9,8 @@
         name: "{{ item }}"
   loop: "{{ _operators | map(attribute='namespaces') | flatten }}"
 
+# Namespaces in operators_existing_operator_groups already have a compatible
+# OperatorGroup; a second one would stop OLM from installing anything there.
 - name: Create namespaced operator groups
   kubernetes.core.k8s:
     state: present
@@ -19,7 +21,10 @@
         name: "{{ item.subscription.namespace }}"
         namespace: "{{ item.subscription.namespace }}"
       spec: "{{ item.operator_group }}"
-  loop: "{{ _operators | selectattr('operator_group', 'defined') | list }}"
+  loop: >-
+    {{ _operators | selectattr('operator_group', 'defined')
+       | rejectattr('subscription.namespace', 'in', operators_existing_operator_groups | default([]))
+       | list }}
   loop_control:
     label: "{{ item.subscription.namespace }}"
 

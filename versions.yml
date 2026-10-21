@@ -64,6 +64,18 @@ serveguard:
   # the pool needs 8 vCPU: m6i.2xlarge (CPU, AVX-512) or g6.2xlarge (1x L4).
   cpu_instance_type: m6i.2xlarge
   gpu_instance_type: g6.2xlarge
+  # What the ServeGuard checks (roles/serveguard_checks) require.
+  requirements:
+    # RHOAI 3.5 on OpenShift 4.19.9-4.22 (Supported Configurations for 3.x).
+    openshift: { min: "4.19.9", max_exclusive: "4.23" }
+    # Minimum local CLI versions; null = must be present, any version.
+    cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", uv: "0.4.0", make: "3.81", ocm: null }
+    python_modules: [kubernetes, jmespath]
+    # EC2 vCPU quota codes per instance family (Running On-Demand instances).
+    quota_codes:
+      standard: L-1216C47A   # A, C, D, H, I, M, R, T, Z
+      g_vt: L-DB2E81BA       # G and VT
+      p: L-417A185B          # P
 
 # OCM API schema — pin API versions, response schemas, and field paths.
 # Bump api.*.version when migrating to a new OCM API version.

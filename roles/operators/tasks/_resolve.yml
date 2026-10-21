@@ -1,6 +1,8 @@
 ---
 # Resolve operators_enabled into one record per operator:
 # versions.operators[key] (channel, package, source) + operators_install[key] + key.
+# A caller that has already checked which operators are installed (serveguard_checks)
+# passes `operators_subset` to install only those.
 
 - name: Assert enabled operators are known
   ansible.builtin.assert:
@@ -10,7 +12,7 @@
     fail_msg: >-
       Operator '{{ item }}' in operators_enabled has no entry in versions.yml
       (operators.{{ item }}) or roles/operators/defaults/main.yml (operators_install.{{ item }}).
-  loop: "{{ operators_enabled }}"
+  loop: "{{ operators_subset | default(operators_enabled) }}"
 
 - name: Reset resolved operator list
   ansible.builtin.set_fact:
@@ -23,4 +25,4 @@
            'key': item,
            'channel': rhoai_channel if item == 'rhoai' else versions.operators[item].channel
          })] }}
-  loop: "{{ operators_enabled }}"
+  loop: "{{ operators_subset | default(operators_enabled) }}"

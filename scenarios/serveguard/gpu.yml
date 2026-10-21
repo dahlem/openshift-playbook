@@ -12,7 +12,6 @@
 #   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
 
 operators_enabled: [cert_manager, nfd, gpu, rhoai]
-operators_validate_channels: true
 rhoai_channel: "{{ versions.serveguard.rhoai_channel }}"
 ai_platform_mode: standard
 

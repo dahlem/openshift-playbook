@@ -54,19 +54,6 @@
   loop_control:
     label: "{{ item.item.key }}"
 
-- name: Assert requested channels are in the catalog
-  ansible.builtin.assert:
-    that: item.item.channel in (item.resources[0].status.channels | default([]) | map(attribute='name') | list)
-    fail_msg: >-
-      Channel '{{ item.item.channel }}' of operator '{{ item.item.key }}' (package={{ item.item.package }})
-      is not offered by the catalog. Available:
-      {{ item.resources[0].status.channels | default([]) | map(attribute='name') | join(', ') }}.
-      Pick one with -e rhoai_channel=<channel> (rhoai) or fix versions.yml.
-  loop: "{{ _pkg_results.results }}"
-  loop_control:
-    label: "{{ item.item.key }}"
-  when: operators_validate_channels | bool
-
 - name: Check if operator subscriptions already exist
   kubernetes.core.k8s_info:
     api_version: operators.coreos.com/v1alpha1
@@ -108,13 +95,15 @@
          | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0) and
         (_pre_crd_results.results | selectattr('resources', 'defined')
          | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0) and
-        (_channel_drift | length == 0)
+        (_channel_drift | length == 0 or not (operators_apply_channel_change | default(false) | bool))
       ) }}
 
 - name: "operators: subscription channel changed"
   ansible.builtin.debug:
     msg: "Subscriptions {{ _channel_drift | join(', ') }} will move to the requested channel."
-  when: _channel_drift | length > 0
+  when:
+    - _channel_drift | length > 0
+    - operators_apply_channel_change | default(false) | bool
 
 - name: "operators: already complete, skipping deploy."
   ansible.builtin.debug:
