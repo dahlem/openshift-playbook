@@ -1,0 +1,48 @@
+---
+# Post: every enabled operator's Subscription is on the requested channel and its CSV Succeeded.
+- name: "post operators: wait for CSVs"
+  block:
+    - name: Wait for an installed CSV
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ item.namespace }}"
+        name: "{{ item.sub_name }}"
+      register: _sg_wait_sub
+      until: (_sg_wait_sub.resources[0].status.installedCSV | default('')) | length > 0
+      retries: "{{ (serveguard_wait_operator | int / 10) | int }}"
+      delay: 10
+      loop: "{{ _sg_operator_reqs }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Wait for the CSV to succeed
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ item.item.namespace }}"
+        name: "{{ item.resources[0].status.installedCSV }}"
+      register: _sg_wait_csv
+      until: (_sg_wait_csv.resources[0].status.phase | default('')) == 'Succeeded'
+      retries: "{{ (serveguard_wait_operator | int / 10) | int }}"
+      delay: 10
+      loop: "{{ _sg_wait_sub.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+  rescue:
+    - name: Diagnose the operators
+      ansible.builtin.include_tasks: _diagnose.yml
+      vars:
+        _sg_diag_title: "an operator did not reach CSV Succeeded within {{ serveguard_wait_operator }}s"
+        _sg_diag_cmds: >-
+          {{ _sg_operator_reqs | map(attribute='namespace') | map('sg_operator_diag') | flatten }}
+
+- name: "post operators: re-read and decide"
+  ansible.builtin.include_tasks: pre_operators.yml
+  vars:
+    serveguard_checks_mode: enforce
+
+- name: Assert the operators postcondition
+  ansible.builtin.assert:
+    that: _sg_operators.action == 'satisfied'
+    fail_msg: "Operators still pending: {{ _sg_operators.subset | join(', ') }}"

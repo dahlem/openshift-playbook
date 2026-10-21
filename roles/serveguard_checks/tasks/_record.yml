@@ -1,0 +1,21 @@
+---
+# Record _sg_result.rows, show them, and in enforce mode stop on a blocking row.
+
+- name: Record check results
+  ansible.builtin.set_fact:
+    _sg_checks: "{{ _sg_checks | default([]) | sg_merge_rows(_sg_result.rows) }}"
+
+- name: "Checks: {{ _sg_result.rows[0].step | default('none') }}"
+  ansible.builtin.debug:
+    msg: "{{ _sg_result.rows | map('serveguard_row') | list }}"
+
+- name: Stop on a blocking check
+  ansible.builtin.fail:
+    msg: |
+      Stopping before {{ _sg_result.rows[0].step }}: nothing was changed by this step.
+      {% for r in _sg_result.rows if r.status in ['fail', 'conflict'] %}
+      - [{{ r.status | upper }}] {{ r.check }}: {{ r.detail }}
+      {% endfor %}
+  when:
+    - serveguard_checks_mode == 'enforce'
+    - _sg_result.rows | selectattr('status', 'in', ['fail', 'conflict']) | list | length > 0

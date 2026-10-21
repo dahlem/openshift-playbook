@@ -1,0 +1,12 @@
+---
+# _sg_operator_reqs (from _resolve_operators.yml) and _sg_raw_operators are parallel lists.
+- name: Evaluate the operators
+  ansible.builtin.set_fact:
+    _sg_result: "{{ _sg_raw_operators | sg_eval_operators(_sg_operator_reqs) }}"
+
+- name: Keep the operators decision
+  ansible.builtin.set_fact:
+    _sg_operators: "{{ _sg_result }}"
+
+- name: Record operator checks
+  ansible.builtin.include_tasks: _record.yml

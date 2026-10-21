@@ -1,0 +1,33 @@
+---
+# Nodes this run adds: the cluster's workers if the cluster is new, the serving
+# pool if the pool is new. The serving node must hold the predictor and one
+# co-located Job (the store is ReadWriteOnce).
+- name: Evaluate quotas and instance types
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_quota | sg_eval_quota({
+           'nodes': [{'type': versions.infrastructure.compute_instance_type},
+                     {'type': serveguard_pool_instance_type}],
+           'new_nodes': ([{'type': versions.infrastructure.compute_instance_type,
+                           'count': serveguard_cluster_workers | int}]
+                         if _sg_cluster.action == 'create' else [])
+                        + ([{'type': serveguard_pool_instance_type,
+                             'count': (gpu_pool_max_replicas if gpu_pool_autoscaling | bool
+                                       else gpu_pool_replicas | default(1)) | int}]
+                           if _sg_pool.action == 'create' else []),
+           'quota_codes': versions.serveguard.requirements.quota_codes,
+           'serving_type': serveguard_pool_instance_type,
+           'serving_demand': _sg_serving_demand,
+           'node_overhead': serveguard_node_overhead,
+           'accelerator': serveguard_accelerator }) }}
+  vars:
+    _sg_serving_demand:
+      cpu: "{{ (serveguard_predictor_cpu | k8s_cpu) + (serveguard_job_resources.cpu | k8s_cpu) }}m"
+      memory: "{{ (serveguard_predictor_memory | k8s_bytes) + (serveguard_job_resources.memory | k8s_bytes) }}"
+
+- name: Keep the quota decision
+  ansible.builtin.set_fact:
+    _sg_quota: "{{ _sg_result }}"
+
+- name: Record quota checks
+  ansible.builtin.include_tasks: _record.yml

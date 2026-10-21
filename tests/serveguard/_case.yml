@@ -1,0 +1,62 @@
+---
+- name: Reset overridable variables
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ item.value }}"
+  loop: "{{ _test_defaults | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Reset per-case facts
+  ansible.builtin.set_fact:
+    _sg_stories_digest: ""
+    _sg_refused_names: null
+    _sg_refused_jobs: []
+    _sg_pool: { action: satisfied }
+
+- name: Apply case variables and facts
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ item.value }}"
+  loop: "{{ (case.vars | default({})) | combine(case.facts | default({})) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Set the gathered state from fixtures
+  ansible.builtin.set_fact:
+    "_sg_raw_{{ case.step }}": "{{ case.raw }}"
+
+- name: Resolve operator requirements
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: _resolve_operators.yml
+  when: case.step == 'operators'
+
+- name: Evaluate
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: "_evaluate_{{ case.step }}.yml"
+
+- name: "Check: {{ case.name }}"
+  ansible.builtin.assert:
+    that:
+      - case.expect.action is not defined or _sg_result.action == case.expect.action
+      - case.expect.blocking is not defined or (_blocking | length > 0) == case.expect.blocking
+      - _status_mismatch | length == 0
+      - _missing_detail | length == 0
+      - case.expect.subset is not defined or _sg_result.subset == case.expect.subset
+      - case.expect.existing_operator_groups is not defined or _sg_result.existing_operator_groups == case.expect.existing_operator_groups
+      - case.expect.apply_channel_change is not defined or _sg_result.apply_channel_change == case.expect.apply_channel_change
+    fail_msg: |
+      {{ case.name }}
+      action={{ _sg_result.action }} blocking={{ _blocking | length > 0 }} subset={{ _sg_result.subset | default('-') }}
+      status mismatches: {{ _status_mismatch }}
+      missing details: {{ _missing_detail }}
+      rows:
+      {{ _sg_result.rows | map('serveguard_row') | join('\n') }}
+    quiet: true
+  vars:
+    _blocking: "{{ _sg_result.rows | selectattr('status', 'in', ['fail', 'conflict']) | list }}"
+    _by_check: "{{ dict(_sg_result.rows | map(attribute='check') | zip(_sg_result.rows | map(attribute='status'))) }}"
+    _status_mismatch: >-
+      {% set out = [] %}{% for k, v in (case.expect.status | default({})).items() %}{% if (v is none and k in _by_check) or (v is not none and _by_check.get(k) != v) %}{% set _ = out.append(k ~ ': want ' ~ v ~ ', got ' ~ _by_check.get(k)) %}{% endif %}{% endfor %}{{ out }}
+    _missing_detail: >-
+      {{ case.expect.detail | default([]) | reject('in', _sg_result.rows | map(attribute='detail') | join(' || ')) | list }}

@@ -1,0 +1,63 @@
+---
+# Offline: run every decision case in cases.yml through the real
+# _evaluate_<step>.yml tasks and the serveguard_checks filters.
+#
+#   tests/serveguard/run.sh
+- name: ServeGuard check decisions (offline, fixtures)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    serveguard_checks_mode: report
+    rosa_cluster_name: serveguard
+    aws_region: us-east-1
+    rosa_oidc_config_id: oidc-123
+    rosa_private_subnet: subnet-priv
+    rosa_public_subnet: subnet-pub
+    serveguard_pool_name: sg-cpu
+    serveguard_pool_instance_type: m6i.2xlarge
+    operators_enabled: [cert_manager, rhoai]
+    rhoai_channel: stable-3.5
+    ai_platform_mode: standard
+    mk_params: [RHOAI_CHANNEL, NAMESPACE, ISVC, ACCELERATOR, VLLM_IMAGE, MODEL, MODEL_REVISION, TIMEOUT,
+                STORE_ACCESS_MODE, PREDICTOR_CPU, PREDICTOR_MEMORY]
+    # Variables a case may override; reset to these before each case.
+    _test_defaults:
+      serveguard_allow_cluster_version: false
+      serveguard_allow_pool_mismatch: false
+      serveguard_allow_channel_change: false
+      serveguard_allow_dsc_update: false
+      serveguard_cluster_must_exist: false
+      serveguard_redeploy: false
+      serveguard_accelerator: cpu
+      serveguard_image: ""
+      serveguard_store_access_mode: ReadWriteOnce
+      serveguard_predictor_cpu: "4"
+      serveguard_predictor_memory: 8Gi
+      serveguard_pool_instance_type: m6i.2xlarge
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    - name: Load fixtures
+      ansible.builtin.set_fact:
+        fx: "{{ fx | default({}) | combine({(item | basename | splitext | first): lookup('file', item) | from_json}) }}"
+      loop: "{{ query('fileglob', playbook_dir ~ '/fixtures/*.json') }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Load cases
+      ansible.builtin.include_vars:
+        file: cases.yml
+
+    - name: Run cases
+      ansible.builtin.include_tasks: _case.yml
+      loop: "{{ cases }}"
+      loop_control:
+        loop_var: case
+        label: "{{ case.step }}: {{ case.name }}"
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ cases | length }} decision cases passed."

@@ -1,0 +1,7 @@
+{
+ "metadata": {
+  "namespace": "redhat-ods-operator",
+  "name": "rhods-operator"
+ },
+ "spec": {}
+}

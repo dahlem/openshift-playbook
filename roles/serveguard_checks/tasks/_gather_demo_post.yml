@@ -1,0 +1,40 @@
+---
+- name: Read the demo's InferenceServices
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ serveguard_namespace }}"
+  register: _sg_post_isvcs
+
+- name: Read the admission policy and binding
+  kubernetes.core.k8s_info:
+    api_version: admissionregistration.k8s.io/v1
+    kind: "{{ item }}"
+    name: "serveguard-admitted-adapters-{{ serveguard_namespace }}"
+  register: _sg_post_vap
+  loop: [ValidatingAdmissionPolicy, ValidatingAdmissionPolicyBinding]
+
+- name: Read predictor pods
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ serveguard_namespace }}"
+    label_selectors:
+      - "serving.kserve.io/inferenceservice={{ serveguard_isvc }}"
+  register: _sg_post_pods
+
+- name: Read Jobs
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ serveguard_namespace }}"
+  register: _sg_post_jobs
+
+- name: Collect demo postcondition facts
+  ansible.builtin.set_fact:
+    _sg_raw_demo_post:
+      isvcs: "{{ _sg_post_isvcs.resources }}"
+      isvc: "{{ _sg_post_isvcs.resources | selectattr('metadata.name', 'equalto', serveguard_isvc) | first | default(none) }}"
+      vap: "{{ _sg_post_vap.results[0].resources | length > 0 }}"
+      binding: "{{ _sg_post_vap.results[1].resources | length > 0 }}"
+      pods: "{{ _sg_post_pods.resources }}"
+      jobs: "{{ _sg_post_jobs.resources }}"

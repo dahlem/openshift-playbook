@@ -1,0 +1,30 @@
+---
+# Post: a serving node advertises allocatable nvidia.com/gpu.
+- name: "post gpu stack: wait for allocatable GPUs"
+  block:
+    - name: Wait for nvidia.com/gpu
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "node.kubernetes.io/instance-type={{ serveguard_pool_instance_type }}"
+      register: _sg_wait
+      until: >-
+        _sg_wait.resources | map(attribute='status.allocatable')
+        | selectattr('nvidia.com/gpu', 'defined') | rejectattr('nvidia.com/gpu', 'equalto', '0') | list | length > 0
+      retries: "{{ (serveguard_wait_gpu | int / 15) | int }}"
+      delay: 15
+  rescue:
+    - name: Diagnose the GPU stack
+      ansible.builtin.include_tasks: _diagnose.yml
+      vars:
+        _sg_diag_title: "no allocatable nvidia.com/gpu within {{ serveguard_wait_gpu }}s"
+        _sg_diag_cmds:
+          - "oc get clusterpolicy gpu-cluster-policy -o jsonpath='{.status}'"
+          - "oc get pods -n nvidia-gpu-operator --field-selector status.phase!=Running"
+          - "oc get pods -n nvidia-gpu-operator"
+          - "oc get events -n nvidia-gpu-operator --field-selector type=Warning --sort-by=.lastTimestamp"
+
+- name: "post gpu stack: re-read and decide"
+  ansible.builtin.include_tasks: pre_gpu_stack.yml
+  vars:
+    serveguard_checks_mode: enforce

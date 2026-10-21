@@ -1,0 +1,528 @@
+---
+# Decision cases for roles/serveguard_checks, run offline on fixture JSON by
+# test_checks.yml. Each case sets _sg_raw_<step> (what the gather tasks would
+# have read), optional extra facts/vars, runs _evaluate_<step>.yml and checks:
+#   action   the decision (_sg_result.action)
+#   status   {check: status} for the rows named
+#   blocking whether any row is fail/conflict (the step would stop)
+#   detail   substrings that must appear in some row's detail
+cases:
+  # ---- local tools -------------------------------------------------------------------
+  - name: local tools present and new enough
+    step: local
+    raw:
+      ansible_core: "2.20.3"
+      tools:
+        rosa: { rc: 0, out: "1.2.62\nYour ROSA CLI is up to date." }
+        aws: { rc: 0, out: "aws-cli/2.31.8 Python/3.13.7 Darwin/25.6.0" }
+        oc: { rc: 0, out: "Client Version: 4.20.0\nKustomize Version: v5.6.0" }
+        ocm: { rc: 0, out: "1.0.10" }
+        make: { rc: 0, out: "GNU Make 3.81" }
+        uv: { rc: 0, out: "uv 0.9.5 (Homebrew 2025-10-21)" }
+      python_modules: { kubernetes: true, jmespath: true }
+    expect: { blocking: false, status: { rosa: ok, oc: ok, ansible_core: ok } }
+
+  - name: old oc and missing uv block
+    step: local
+    raw:
+      ansible_core: "2.14.1"
+      tools:
+        rosa: { rc: 0, out: "1.2.62" }
+        aws: { rc: 0, out: "aws-cli/2.31.8" }
+        oc: { rc: 0, out: "Client Version: 4.16.3" }
+        ocm: { rc: 0, out: "1.0.10" }
+        make: { rc: 0, out: "GNU Make 4.4" }
+        uv: { rc: 127, out: "sh: uv: command not found" }
+      python_modules: { kubernetes: false, jmespath: true }
+    expect:
+      blocking: true
+      status: { oc: fail, uv: fail, ansible_core: fail, "python: kubernetes": fail, rosa: ok }
+      detail: ["4.16.3 < required 4.19.0", "pip install kubernetes"]
+
+  # ---- AWS account (bootstrap postcondition) --------------------------------------------
+  - name: account ready
+    step: aws
+    raw:
+      identity: "{{ fx['aws-identity'] }}"
+      rosa_logged_in: true
+      oidc_configs: "{{ fx['rosa-oidc'] }}"
+      roles: { installer: { arn: "arn:aws:iam::1:role/HCP-ROSA-Installer-Role", exists: true },
+               support: { arn: "arn:aws:iam::1:role/HCP-ROSA-Support-Role", exists: true },
+               worker: { arn: "arn:aws:iam::1:role/HCP-ROSA-Worker-Role", exists: true } }
+      elb_role: true
+      subnets: "{{ fx['aws-subnets'] }}"
+      tag_count: 12
+    expect: { blocking: false, status: { "OIDC config": ok, "IAM installer role": ok, "subnet tag headroom": ok } }
+
+  - name: empty account - missing roles, ELB role, OIDC; split VPC
+    step: aws
+    raw:
+      identity: "{{ fx['aws-identity'] }}"
+      rosa_logged_in: true
+      oidc_configs: []
+      roles: { installer: { arn: "arn:aws:iam::1:role/HCP-ROSA-Installer-Role", exists: false },
+               support: { arn: "arn:aws:iam::1:role/HCP-ROSA-Support-Role", exists: true },
+               worker: { arn: "arn:aws:iam::1:role/HCP-ROSA-Worker-Role", exists: true } }
+      elb_role: false
+      subnets: "{{ fx['aws-subnets-split-vpc'] }}"
+      tag_count: 45
+    expect:
+      blocking: true
+      status: { "OIDC config": fail, "IAM installer role": fail, "ELB service-linked role": fail,
+                "subnet pair": fail, "subnet tag headroom": fail }
+      detail: ["rosa create account-roles --mode auto --hosted-cp", "create-service-linked-role"]
+
+  - name: no AWS session
+    step: aws
+    raw: { identity: null }
+    expect: { blocking: true, status: { session: fail } }
+
+  # ---- cluster -------------------------------------------------------------------------
+  - name: cluster absent -> create
+    step: cluster
+    raw: { exists: false, cluster: {} }
+    expect: { action: create, blocking: false, status: { exists: todo } }
+
+  - name: cluster absent on the on-cluster playbook -> fail
+    step: cluster
+    vars: { serveguard_cluster_must_exist: true }
+    raw: { exists: false, cluster: {} }
+    expect: { action: none, blocking: true, status: { exists: fail } }
+
+  - name: cluster ready at pinned version -> skip
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { ready: satisfied } }
+
+  - name: cluster installing -> wait
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-installing'] }}" }
+    expect: { action: wait, blocking: false, status: { state: wait } }
+
+  - name: cluster in error -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-error'] }}" }
+    expect: { action: none, blocking: true, status: { state: conflict } }
+
+  - name: cluster too old -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
+    expect: { action: none, blocking: true, status: { version: conflict }, detail: ["4.18.20 outside 4.19.9"] }
+
+  - name: cluster too old with override -> satisfied
+    step: cluster
+    vars: { serveguard_allow_cluster_version: true }
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
+    expect: { action: satisfied, blocking: false, status: { version: override } }
+
+  - name: classic cluster -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-classic'] }}" }
+    expect: { action: none, blocking: true, status: { "hosted control plane": conflict } }
+
+  # ---- serving pool ---------------------------------------------------------------------
+  - name: pool absent -> create
+    step: pool
+    raw: { cluster_exists: true, exists: false, pool: {}, nodes: [] }
+    expect: { action: create, blocking: false, status: { sg-cpu: todo } }
+
+  - name: pool matches, node Ready -> skip
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-cpu'] }}", nodes: "{{ fx['nodes-cpu'][2:] }}" }
+    expect: { action: satisfied, blocking: false, status: { sg-cpu: satisfied } }
+
+  - name: pool matches, no node yet -> wait
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-cpu'] }}", nodes: [] }
+    expect: { action: wait, blocking: false, status: { sg-cpu: wait } }
+
+  - name: pool with wrong instance type -> conflict
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-wrong-type'] }}", nodes: [] }
+    expect: { action: none, blocking: true, status: { sg-cpu: conflict }, detail: ["instance type m5.xlarge != m6i.2xlarge"] }
+
+  - name: tainted pool -> conflict
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-tainted'] }}", nodes: [] }
+    expect: { action: none, blocking: true, status: { sg-cpu: conflict }, detail: ["taints"] }
+
+  - name: wrong pool with override -> accept as is
+    step: pool
+    vars: { serveguard_allow_pool_mismatch: true }
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-wrong-type'] }}", nodes: [] }
+    expect: { action: accept, blocking: false, status: { sg-cpu: override } }
+
+  # ---- quotas and instance types --------------------------------------------------------
+  - name: new cluster + pool fit the Standard quota
+    step: quota
+    facts: { _sg_cluster: { action: create }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, m6i.2xlarge]
+      rosa_types: [m5.2xlarge, m6i.2xlarge, g6.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: [{ type: t3.large, vcpus: 2 }]
+    expect:
+      blocking: false
+      status: { "m6i.2xlarge offered": ok, "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": ok, "m6i.2xlarge holds predictor+Job": ok }
+      detail: ["this run adds 24"]
+
+  - name: Standard quota too small for a new cluster
+    step: quota
+    facts: { _sg_cluster: { action: create }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, m6i.2xlarge]
+      rosa_types: [m5.2xlarge, m6i.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 16.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: []
+    expect:
+      blocking: true
+      status: { "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": fail }
+      detail: ["--quota-code L-1216C47A --desired-value 24"]
+
+  - name: GPU pool on an existing cluster needs G/VT quota (new account has 0)
+    step: quota
+    vars: { serveguard_pool_instance_type: g6.2xlarge, serveguard_accelerator: nvidia }
+    facts: { _sg_cluster: { action: satisfied }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, g6.2xlarge]
+      rosa_types: [m5.2xlarge, g6.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: [{ type: m5.2xlarge, vcpus: 8 }, { type: m5.2xlarge, vcpus: 8 }]
+    expect:
+      blocking: true
+      status: { "vCPU quota G and VT": fail, "g6.2xlarge offered": ok, "g6.2xlarge has a GPU": ~ }
+      detail: ["--quota-code L-DB2E81BA --desired-value 8"]
+
+  - name: GPU type not offered in the AZ, too-small serving type
+    step: quota
+    vars: { serveguard_pool_instance_type: g6.xlarge, serveguard_accelerator: nvidia }
+    facts: { _sg_cluster: { action: satisfied }, _sg_pool: { action: satisfied } }
+    raw:
+      az: us-east-1e
+      offered: [m5.2xlarge]
+      rosa_types: [m5.2xlarge, g6.xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 32.0, L-417A185B: 0.0 }
+      instances: []
+    expect:
+      blocking: true
+      status: { "g6.xlarge offered": fail, "g6.xlarge holds predictor+Job": fail }
+
+  # ---- operators ------------------------------------------------------------------------
+  - name: fresh cluster -> install both, create OperatorGroups
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: install, blocking: false, subset: [cert_manager, rhoai], existing_operator_groups: [] }
+
+  - name: both installed on the requested channel, CSV Succeeded -> skip
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: ["{{ fx['og-rhods-ours'] | combine({'metadata': {'name': 'cert-manager-operator', 'namespace': 'cert-manager-operator'}}) }}"],
+          subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: satisfied, blocking: false, subset: [] }
+
+  - name: RHOAI installing -> wait (re-applied, no change)
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-installing'] }}" }
+    expect: { action: install, blocking: false, subset: [rhoai] }
+
+  - name: requested channel not in the catalog -> fail before subscribing
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods-no35'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["stable-3.5 not offered by rhods-operator; available: fast-3.x, stable-3.x, stable"] }
+
+  - name: RHOAI on another channel (a Mistral install on stable) -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: none, blocking: true, detail: ["on channel stable, requested stable-3.5"] }
+
+  - name: channel change with override -> re-apply that Subscription
+    step: operators
+    vars: { serveguard_allow_channel_change: true }
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: install, blocking: false, subset: [rhoai], apply_channel_change: true }
+
+  - name: compatible foreign OperatorGroup (integration's env-up) -> adopt, no second one
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-foreign'] }}"], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: install, blocking: false, subset: [cert_manager, rhoai], existing_operator_groups: [redhat-ods-operator] }
+
+  - name: two OperatorGroups -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}", "{{ fx['og-rhods-foreign'] }}"],
+          subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["2 OperatorGroups in redhat-ods-operator"] }
+
+  - name: OperatorGroup with a different target mode -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-single-ns'] }}"], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["rhods-og targets ['redhat-ods-operator']"] }
+
+  - name: package already subscribed in another namespace -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null,
+          other_subscriptions: ["{{ fx['sub-rhods-elsewhere'] }}"], csv: null }
+    expect: { action: none, blocking: true, detail: ["openshift-operators/my-rhoai already subscribes to rhods-operator"] }
+
+  - name: CSV Failed -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-failed'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["Failed: install strategy failed"] }
+
+  # ---- DSCI / DSC ------------------------------------------------------------------------
+  - name: no DSC yet -> create
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: [], dscis: ["{{ fx['dsci-default'] }}"], kserve: null }
+    expect: { action: create, blocking: false, status: { DataScienceCluster: todo, DSCInitialization: ok } }
+
+  - name: RHOAI not installed yet (preflight) -> n/a
+    step: platform
+    facts: { _sg_operators: { subset: [rhoai] } }
+    raw: { cluster_reachable: true, dsc_crd: false, dscs: [], dscis: [], kserve: null }
+    expect: { action: create, blocking: false, status: { DataScienceCluster: n/a } }
+
+  - name: DSC as required and Ready -> skip
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-ready'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { DataScienceCluster: satisfied } }
+
+  - name: DSC as required, progressing -> wait
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-progressing'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: null }
+    expect: { action: wait, blocking: false, status: { DataScienceCluster: wait } }
+
+  - name: DSC with other components Managed -> conflict
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: none, blocking: true, status: { DataScienceCluster: conflict }, detail: ["dashboard Managed", "workbenches Managed"] }
+
+  - name: DSC differs with override -> update
+    step: platform
+    vars: { serveguard_allow_dsc_update: true }
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: update, blocking: false, status: { DataScienceCluster: override } }
+
+  - name: DSC under another name, foreign DSCI -> conflict
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-other-name'] }}"], dscis: ["{{ fx['dsci-other'] }}"], kserve: null }
+    expect: { action: none, blocking: true, status: { DSCInitialization: conflict }, detail: ["rhods exists; only one DSC per cluster"] }
+
+  # ---- GPU stack ---------------------------------------------------------------------------
+  - name: GPU allocatable and ClusterPolicy ready -> skip
+    step: gpu_stack
+    vars: { serveguard_pool_instance_type: g6.2xlarge }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu'][1:] }}", cluster_policy: { status: { state: ready } } }
+    expect: { action: satisfied, blocking: false }
+
+  - name: GPU node without driver yet -> install
+    step: gpu_stack
+    vars: { serveguard_pool_instance_type: g6.2xlarge }
+    raw: { cluster_reachable: true, nodes: "{{ [fx['nodes-gpu'][1] | combine({'status': {'allocatable': {'cpu': '7500m'}, 'conditions': [{'type': 'Ready', 'status': 'True'}]}})] }}", cluster_policy: null }
+    expect: { action: install, blocking: false }
+
+  # ---- registry, storage ---------------------------------------------------------------------
+  - name: registry Managed with storage
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
+    expect: { blocking: false, status: { managementState: ok, "image-registry deployment": ok } }
+
+  - name: registry Removed (bare-metal SNO style) -> fail
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
+    expect: { blocking: true, status: { managementState: fail } }
+
+  - name: registry not needed with an external image
+    step: registry
+    vars: { serveguard_image: "quay.io/me/serveguard-receiver:1" }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
+    expect: { blocking: false, status: { "internal registry": n/a } }
+
+  - name: default gp3 StorageClass, no PVC yet
+    step: storage
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
+    expect: { blocking: false, status: { StorageClass: ok, "PVC serveguard-store": todo } }
+
+  - name: no default StorageClass, undersized existing PVC
+    step: storage
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-no-default'] }}", pvc: "{{ fx['pvc-small'] }}" }
+    expect: { blocking: true, status: { StorageClass: fail, "PVC serveguard-store": conflict }, detail: ["capacity 1Gi < 5Gi"] }
+
+  - name: ReadWriteMany on EBS -> fail
+    step: storage
+    vars: { serveguard_store_access_mode: ReadWriteMany }
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}", pvc: null }
+    expect: { blocking: true, status: { StorageClass: fail }, detail: ["cannot provide ReadWriteMany"] }
+
+  # ---- capacity --------------------------------------------------------------------------------
+  - name: CPU demo fits; the demo's own old predictor is not counted
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect:
+      blocking: false
+      status: { "schedulable nodes": ok, "receiver build": ok, "predictor (+guard init)": ok, "predictor + story Job": ok }
+      detail: ["fits on ip-10-0-1-3"]
+
+  - name: busy cluster -> predictor does not fit
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-busy'] }}" }
+    expect:
+      blocking: true
+      status: { "receiver build": ok, "predictor (+guard init)": fail, "predictor + story Job": fail }
+      detail: ["no schedulable node has 4 CPU / 8.0Gi / 30.0Gi ephemeral free"]
+
+  - name: a pod's init container counts as its request (max of init, sum of main)
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-init'] }}" }
+    expect: { blocking: true, status: { "predictor (+guard init)": ok, "predictor + story Job": fail }, detail: ["fits on ip-10-0-1-3 (free 4 CPU"] }
+
+  - name: 4 vCPU workers, serving pool still to be created -> n/a, not fail
+    step: capacity
+    facts: { _sg_pool: { action: create } }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
+    expect: { blocking: false, status: { "predictor (+guard init)": n/a, "receiver Job": ok } }
+
+  - name: 4 vCPU workers cannot hold a 4 CPU predictor
+    step: capacity
+    facts: { _sg_pool: { action: satisfied } }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
+    expect: { blocking: true, status: { "predictor (+guard init)": fail } }
+
+  - name: bigger predictor from the single variable no longer fits
+    step: capacity
+    vars: { serveguard_predictor_cpu: "7", serveguard_predictor_memory: 24Gi }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: true, status: { "predictor + story Job": fail }, detail: ["no schedulable node has 7.5 CPU / 25.0Gi"] }
+
+  - name: GPU node tainted -> GPU predictor cannot schedule
+    step: capacity
+    vars: { serveguard_accelerator: nvidia }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu-tainted'] }}", pods: [] }
+    expect: { blocking: true, status: { "predictor (+guard init)": fail }, detail: ["/ 1 GPU"] }
+
+  - name: GPU node untainted -> GPU predictor fits
+    step: capacity
+    vars: { serveguard_accelerator: nvidia }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu'] }}", pods: [] }
+    expect: { blocking: false, status: { "predictor (+guard init)": ok }, detail: ["fits on ip-10-0-2-1"] }
+
+  # ---- demo ---------------------------------------------------------------------------------------
+  - name: no InferenceService -> deploy
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true, isvcs: [], isvc: null }
+    expect: { action: deploy, blocking: false, status: { InferenceService: todo, "predictor size": ok } }
+
+  - name: admitted and Ready -> skip
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
+           isvcs: ["{{ fx['isvc-admitted-ready'] }}"], isvc: "{{ fx['isvc-admitted-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { InferenceService: satisfied } }
+
+  - name: admitted and Ready with redeploy -> deploy
+    step: demo
+    vars: { serveguard_redeploy: true }
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
+           isvcs: ["{{ fx['isvc-admitted-ready'] }}"], isvc: "{{ fx['isvc-admitted-ready'] }}" }
+    expect: { action: deploy, blocking: false, status: { InferenceService: override } }
+
+  - name: admitted but not Ready (story 5 leftover) -> conflict with restore hint
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
+           isvcs: ["{{ fx['isvc-admitted-notready'] }}"], isvc: "{{ fx['isvc-admitted-notready'] }}" }
+    expect: { action: none, blocking: true, detail: ["story-restore"] }
+
+  - name: same-named service without verdict -> conflict
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
+           isvcs: ["{{ fx['isvc-foreign'] }}"], isvc: "{{ fx['isvc-foreign'] }}" }
+    expect: { action: none, blocking: true, detail: ["without a ServeGuard verdict"] }
+
+  - name: GPU-admitted service, CPU scenario -> conflict
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params }}", cluster_reachable: true,
+           isvcs: ["{{ fx['isvc-admitted-gpu'] }}"], isvc: "{{ fx['isvc-admitted-gpu'] }}" }
+    expect: { action: none, blocking: true, detail: ["admitted for the other accelerator"] }
+
+  - name: missing checkout -> fail
+    step: demo
+    raw: { checkout: false, makefile_params: [], cluster_reachable: false, isvcs: [], isvc: null }
+    expect: { action: none, blocking: true, status: { "serveguard checkout": fail } }
+
+  - name: custom predictor size, Makefile without the parameter -> fail
+    step: demo
+    vars: { serveguard_predictor_cpu: "6" }
+    raw: { checkout: true, makefile_params: "{{ mk_params | reject('match', 'PREDICTOR_') | list }}", cluster_reachable: true, isvcs: [], isvc: null }
+    expect: { action: none, blocking: true, status: { "predictor size": fail } }
+
+  - name: default predictor size, Makefile without the parameter -> ok
+    step: demo
+    raw: { checkout: true, makefile_params: "{{ mk_params | reject('match', 'PREDICTOR_') | list }}", cluster_reachable: true, isvcs: [], isvc: null }
+    expect: { action: deploy, blocking: false, status: { "predictor size": ok }, detail: ["integration default 4"] }
+
+  # ---- demo and story postconditions --------------------------------------------------------------------
+  - name: after demo-up - admitted, Ready, policy, guard exited 0
+    step: demo_post
+    raw:
+      isvc: "{{ fx['isvc-admitted-ready'] }}"
+      isvcs: ["{{ fx['isvc-admitted-ready'] }}"]
+      vap: true
+      binding: true
+      pods: [{ metadata: { name: serveguard-demo-predictor-abc }, status: { phase: Running, containerStatuses: [{ ready: true }],
+               initContainerStatuses: [{ name: serveguard-guard, state: { terminated: { exitCode: 0 } } }] } }]
+      jobs: []
+    expect: { blocking: false, status: { verdict: ok, "InferenceService Ready": ok, ValidatingAdmissionPolicy: ok, "predictor pod": ok } }
+
+  - name: after the stories - a refused service exists and the digest changed -> fail
+    step: demo_post
+    facts:
+      _sg_stories_digest: "aaaa"
+      _sg_refused_names: [story-unadmitted, story-forged-verdict, story-read-factor, story-certificate]
+      _sg_refused_jobs: [story-admit-read-factor]
+    raw:
+      isvc: "{{ fx['isvc-admitted-ready'] }}"
+      isvcs: ["{{ fx['isvc-admitted-ready'] }}", "{{ fx['isvc-story-leftover'] }}"]
+      vap: true
+      binding: false
+      pods: [{ metadata: { name: p }, status: { phase: Pending } }]
+      jobs: [{ metadata: { name: story-admit-read-factor }, status: { conditions: [{ type: Complete, status: "True" }] } }]
+    expect:
+      blocking: true
+      status: { "verdict unchanged": fail, "refused services absent": fail, ValidatingAdmissionPolicyBinding: fail,
+                "predictor pod": fail, "Job story-admit-read-factor": fail }
+      detail: ["exist although refused: story-forged-verdict", "did not fail"]

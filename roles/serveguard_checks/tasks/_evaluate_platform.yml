@@ -1,0 +1,23 @@
+---
+- name: Load the ai_platform component lists
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../ai_platform/defaults/main.yml"
+  when: ai_platform_standard_removed is not defined
+
+- name: Evaluate the DSCInitialization and DataScienceCluster
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_platform | sg_eval_platform({
+           'dsc_name': 'default-dsc',
+           'dsci_name': 'default-dsci',
+           'kserve': ai_platform_standard_kserve,
+           'removed': ai_platform_standard_removed,
+           'allow_update': serveguard_allow_dsc_update | bool,
+           'rhoai_pending': 'rhoai' in (_sg_operators.subset | default(['rhoai'])) }) }}
+
+- name: Keep the platform decision
+  ansible.builtin.set_fact:
+    _sg_platform: "{{ _sg_result }}"
+
+- name: Record platform checks
+  ansible.builtin.include_tasks: _record.yml

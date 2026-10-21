@@ -1,0 +1,28 @@
+---
+# Before the stories: the admitted service is healthy, so every refusal is
+# measured against a working baseline. Remember its digest.
+- name: "pre stories: read state"
+  ansible.builtin.include_tasks: _gather_demo_post.yml
+
+- name: "pre stories: decide"
+  ansible.builtin.include_tasks: _evaluate_demo_post.yml
+  vars:
+    _sg_refused_names: []
+
+- name: Remember the admitted adapter digest
+  ansible.builtin.set_fact:
+    _sg_stories_digest: "{{ (_sg_raw_demo_post.isvc.metadata.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}"
+
+- name: Refuse to start with story leftovers
+  ansible.builtin.set_fact:
+    _sg_result:
+      rows: >-
+        {{ [{'step': 'stories', 'check': 'no story leftovers',
+             'status': 'conflict' if _sg_leftovers else 'ok',
+             'detail': ('exist from an earlier run: ' ~ (_sg_leftovers | join(', ')) ~ '; make demo-down, then deploy again')
+                       if _sg_leftovers else 'no story-* InferenceService'}] }}
+  vars:
+    _sg_leftovers: "{{ _sg_raw_demo_post.isvcs | map(attribute='metadata.name') | select('match', 'story-') | list }}"
+
+- name: Record story preconditions
+  ansible.builtin.include_tasks: _record.yml

@@ -1,0 +1,15 @@
+---
+- name: "pre operators: requirements"
+  ansible.builtin.include_tasks: _resolve_operators.yml
+
+- name: "pre operators: read state"
+  ansible.builtin.include_tasks: _gather_operators.yml
+  when: serveguard_checks_fixtures is not defined
+
+- name: "pre operators: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_operators: "{{ serveguard_checks_fixtures.operators }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre operators: decide"
+  ansible.builtin.include_tasks: _evaluate_operators.yml

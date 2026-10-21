@@ -1,0 +1,14 @@
+---
+# Postcondition of demo-up; with _sg_stories_digest set, also of demo-stories.
+- name: Evaluate the admitted service
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_demo_post | sg_eval_demo_post({
+           'namespace': serveguard_namespace,
+           'isvc': serveguard_isvc,
+           'expect_digest': _sg_stories_digest | default(''),
+           'refused_names': _sg_refused_names | default(none),
+           'refused_jobs': _sg_refused_jobs | default([]) }) }}
+
+- name: Record demo postconditions
+  ansible.builtin.include_tasks: _record.yml

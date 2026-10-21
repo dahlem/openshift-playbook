@@ -1,0 +1,30 @@
+---
+# Every precondition, read-only, in deploy order; then the table.
+# Used by playbooks/serveguard-demo-preflight.yml (serveguard_checks_mode: report).
+- name: Local tools
+  ansible.builtin.include_tasks: pre_local.yml
+- name: AWS account
+  ansible.builtin.include_tasks: pre_aws.yml
+- name: Cluster
+  ansible.builtin.include_tasks: pre_cluster.yml
+- name: Serving pool
+  ansible.builtin.include_tasks: pre_pool.yml
+- name: Quotas and instance types
+  ansible.builtin.include_tasks: pre_quota.yml
+- name: Operators
+  ansible.builtin.include_tasks: pre_operators.yml
+- name: GPU stack
+  ansible.builtin.include_tasks: pre_gpu_stack.yml
+  when: serveguard_accelerator == 'nvidia'
+- name: DataScienceCluster
+  ansible.builtin.include_tasks: pre_platform.yml
+- name: Internal image registry
+  ansible.builtin.include_tasks: pre_registry.yml
+- name: Storage
+  ansible.builtin.include_tasks: pre_storage.yml
+- name: Capacity
+  ansible.builtin.include_tasks: pre_capacity.yml
+- name: Demo
+  ansible.builtin.include_tasks: pre_demo.yml
+- name: Table
+  ansible.builtin.include_tasks: report.yml

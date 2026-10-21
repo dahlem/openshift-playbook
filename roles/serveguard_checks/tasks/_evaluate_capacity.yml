@@ -1,0 +1,27 @@
+---
+# Requests the demo places on the cluster (integration demo.py), checked against
+# free allocatable on Ready, untainted nodes. The demo namespace's own pods are
+# not counted as used (a redeploy replaces them).
+- name: Evaluate cluster capacity
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_capacity | sg_eval_capacity({
+           'namespace': serveguard_namespace,
+           'pool_pending': (_sg_pool.action | default('satisfied')) in ['create', 'wait'],
+           'demands': _sg_demands }) }}
+  vars:
+    _sg_gpu: "{{ 1 if serveguard_accelerator == 'nvidia' else 0 }}"
+    _sg_pred_cpu: "{{ [serveguard_predictor_cpu | k8s_cpu, serveguard_guard_resources.cpu | k8s_cpu] | max }}"
+    _sg_pred_mem: "{{ [serveguard_predictor_memory | k8s_bytes, serveguard_guard_resources.memory | k8s_bytes] | max }}"
+    _sg_demands: >-
+      {{ ([{'name': 'receiver build', 'cpu': serveguard_build_resources.cpu,
+            'memory': serveguard_build_resources.memory}] if serveguard_image | length == 0 else [])
+         + [{'name': 'receiver Job', 'cpu': serveguard_job_resources.cpu, 'memory': serveguard_job_resources.memory},
+            {'name': 'predictor (+guard init)', 'cpu': _sg_pred_cpu ~ 'm', 'memory': _sg_pred_mem,
+             'gpu': _sg_gpu, 'min_ephemeral': serveguard_min_node_ephemeral},
+            {'name': 'predictor + story Job', 'cpu': ((_sg_pred_cpu | int) + (serveguard_job_resources.cpu | k8s_cpu)) ~ 'm',
+             'memory': (_sg_pred_mem | int) + (serveguard_job_resources.memory | k8s_bytes),
+             'gpu': _sg_gpu, 'min_ephemeral': serveguard_min_node_ephemeral}] }}
+
+- name: Record capacity checks
+  ansible.builtin.include_tasks: _record.yml

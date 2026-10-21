@@ -1,0 +1,8 @@
+{
+ "metadata": {
+  "name": "kserve-controller-manager"
+ },
+ "status": {
+  "readyReplicas": 1
+ }
+}

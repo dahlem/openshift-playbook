@@ -1,0 +1,11 @@
+{
+ "metadata": {
+  "namespace": "redhat-ods-operator",
+  "name": "rhods-og"
+ },
+ "spec": {
+  "targetNamespaces": [
+   "redhat-ods-operator"
+  ]
+ }
+}

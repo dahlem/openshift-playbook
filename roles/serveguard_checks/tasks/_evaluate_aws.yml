@@ -1,0 +1,17 @@
+---
+- name: Evaluate the AWS account and site.yml
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_aws | sg_eval_aws({
+           'region': aws_region | default(''),
+           'oidc_config_id': rosa_oidc_config_id | default(''),
+           'private_subnet': rosa_private_subnet | default(''),
+           'public_subnet': rosa_public_subnet | default(''),
+           'min_tag_headroom': versions.infrastructure.min_subnet_tag_headroom }) }}
+
+- name: Keep the AWS decision
+  ansible.builtin.set_fact:
+    _sg_aws: "{{ _sg_result }}"
+
+- name: Record AWS checks
+  ansible.builtin.include_tasks: _record.yml

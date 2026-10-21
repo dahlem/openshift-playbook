@@ -1,0 +1,48 @@
+[
+ {
+  "metadata": {
+   "name": "ip-10-0-1-1",
+   "labels": {
+    "node.kubernetes.io/instance-type": "m5.xlarge"
+   }
+  },
+  "spec": {},
+  "status": {
+   "allocatable": {
+    "cpu": "3500m",
+    "memory": "14000Mi",
+    "ephemeral-storage": "300Gi",
+    "pods": "250"
+   },
+   "conditions": [
+    {
+     "type": "Ready",
+     "status": "True"
+    }
+   ]
+  }
+ },
+ {
+  "metadata": {
+   "name": "ip-10-0-1-2",
+   "labels": {
+    "node.kubernetes.io/instance-type": "m5.xlarge"
+   }
+  },
+  "spec": {},
+  "status": {
+   "allocatable": {
+    "cpu": "3500m",
+    "memory": "14000Mi",
+    "ephemeral-storage": "300Gi",
+    "pods": "250"
+   },
+   "conditions": [
+    {
+     "type": "Ready",
+     "status": "True"
+    }
+   ]
+  }
+ }
+]

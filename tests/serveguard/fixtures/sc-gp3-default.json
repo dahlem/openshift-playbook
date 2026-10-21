@@ -1,0 +1,17 @@
+[
+ {
+  "metadata": {
+   "name": "gp3-csi",
+   "annotations": {
+    "storageclass.kubernetes.io/is-default-class": "true"
+   }
+  },
+  "provisioner": "ebs.csi.aws.com"
+ },
+ {
+  "metadata": {
+   "name": "gp2-csi"
+  },
+  "provisioner": "ebs.csi.aws.com"
+ }
+]

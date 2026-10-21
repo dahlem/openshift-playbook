@@ -1,0 +1,12 @@
+{
+ "spec": {
+  "managementState": "Managed"
+ },
+ "status": {
+  "storage": {
+   "s3": {
+    "bucket": "b"
+   }
+  }
+ }
+}

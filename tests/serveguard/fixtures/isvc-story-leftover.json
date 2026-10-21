@@ -1,0 +1,29 @@
+{
+ "metadata": {
+  "name": "story-forged-verdict",
+  "annotations": {
+   "serveguard.io/admitted": "true"
+  }
+ },
+ "spec": {
+  "predictor": {
+   "model": {
+    "resources": {
+     "limits": {
+      "cpu": "4",
+      "memory": "8Gi"
+     }
+    }
+   }
+  }
+ },
+ "status": {
+  "conditions": [
+   {
+    "type": "Ready",
+    "status": "False",
+    "reason": "PredictorNotReady"
+   }
+  ]
+ }
+}

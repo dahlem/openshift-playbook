@@ -1,0 +1,36 @@
+---
+# Post: DSC Ready with the required component states, KServe controller ready.
+- name: "post platform: wait for the DataScienceCluster"
+  block:
+    - name: Wait for DataScienceCluster Ready
+      kubernetes.core.k8s_info:
+        api_version: "datasciencecluster.opendatahub.io/{{ ai_platform_api_versions.standard.dsc }}"
+        kind: DataScienceCluster
+        name: default-dsc
+      register: _sg_wait
+      until: (_sg_wait.resources[0].status.phase | default('')) == 'Ready'
+      retries: "{{ (serveguard_wait_platform | int / 15) | int }}"
+      delay: 15
+  rescue:
+    - name: Diagnose the platform
+      ansible.builtin.include_tasks: _diagnose.yml
+      vars:
+        _sg_diag_title: "DataScienceCluster default-dsc not Ready within {{ serveguard_wait_platform }}s"
+        _sg_diag_cmds:
+          - "oc describe datasciencecluster default-dsc | sed -n '/Status:/,$p'"
+          - "oc get dscinitialization -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{\"\\n\"}{end}'"
+          - "oc get csv -n redhat-ods-operator -o wide"
+          - "oc get deploy -n redhat-ods-applications"
+          - "oc get pods -n redhat-ods-applications --field-selector status.phase!=Running"
+          - "oc get events -n redhat-ods-applications --field-selector type=Warning --sort-by=.lastTimestamp"
+          - "oc get pods -n cert-manager"
+
+- name: "post platform: re-read and decide"
+  ansible.builtin.include_tasks: pre_platform.yml
+  vars:
+    serveguard_checks_mode: enforce
+
+- name: Assert the platform postcondition
+  ansible.builtin.assert:
+    that: _sg_platform.action == 'satisfied'
+    fail_msg: "Platform: {{ _sg_platform.rows | map(attribute='detail') | join('; ') }}"

@@ -1,0 +1,51 @@
+---
+# Offline: the story summary parses `make demo-stories` output (stub Makefile
+# printing the expected cluster output) and fails when make fails (RC=2).
+- name: ServeGuard story summary (offline, stub Makefile)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    rhoai_channel: stable-3.5
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    - name: Summarise the stub output
+      ansible.builtin.include_role:
+        name: serveguard_demo
+        tasks_from: stories
+
+    - name: The make arguments carry the predictor size the stub Makefile declares
+      ansible.builtin.assert:
+        that:
+          - "'PREDICTOR_CPU=4' in _sg_make_vars"
+          - "'PREDICTOR_MEMORY=8Gi' in _sg_make_vars"
+          - "'STORE_ACCESS_MODE=ReadWriteOnce' not in _sg_make_vars"
+
+    - name: Every story is summarised with its verdict and reason
+      ansible.builtin.assert:
+        that:
+          - _sg_rows | select('match', '  refused ') | list | length == 6
+          - _sg_rows | select('match', '  restored ') | list | length == 1
+          - "_sg_rows | select('search', 'reason: package root does not match trusted identity') | list | length == 1"
+          - "_sg_rows | select('search', 'denied: adapter must be admitted by ServeGuard') | list | length == 1"
+          - _sg_completion == ' a platform for building and serving models'
+        fail_msg: "{{ _sg_rows }}"
+
+    - name: A failing make fails the play
+      environment:
+        RC: "2"
+      block:
+        - name: Run the stub with make failing
+          ansible.builtin.include_role:
+            name: serveguard_demo
+            tasks_from: stories
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: "the stories task did not fail on make rc=2"
+      rescue:
+        - name: Failure observed
+          ansible.builtin.assert:
+            that: "'make demo-stories failed (rc=2)' in ansible_failed_result.msg"

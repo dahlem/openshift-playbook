@@ -1,0 +1,11 @@
+---
+- name: Evaluate the GPU stack
+  ansible.builtin.set_fact:
+    _sg_result: "{{ _sg_raw_gpu_stack | sg_eval_gpu_stack({'instance_type': serveguard_pool_instance_type}) }}"
+
+- name: Keep the GPU stack decision
+  ansible.builtin.set_fact:
+    _sg_gpu_stack: "{{ _sg_result }}"
+
+- name: Record GPU stack checks
+  ansible.builtin.include_tasks: _record.yml

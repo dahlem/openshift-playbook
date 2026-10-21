@@ -1,0 +1,31 @@
+---
+- name: Check the serveguard integration Makefile
+  ansible.builtin.stat:
+    path: "{{ serveguard_integration_dir }}/Makefile"
+  register: _sg_mk
+
+- name: Read the Makefile
+  ansible.builtin.slurp:
+    src: "{{ serveguard_integration_dir }}/Makefile"
+  register: _sg_mk_body
+  when: _sg_mk.stat.exists
+
+- name: Read the demo's InferenceServices
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ serveguard_namespace }}"
+  register: _sg_isvcs
+  failed_when: false
+  when: _sg_cluster_reachable | bool
+
+- name: Collect demo facts
+  ansible.builtin.set_fact:
+    _sg_raw_demo:
+      checkout: "{{ _sg_mk.stat.exists }}"
+      makefile_params: >-
+        {{ (_sg_mk_body.content | b64decode | regex_findall('(?m)^([A-Z][A-Z0-9_]*)\s*\?=')) if _sg_mk.stat.exists else [] }}
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      isvcs: "{{ _sg_isvcs.resources | default([]) }}"
+      isvc: >-
+        {{ _sg_isvcs.resources | default([]) | selectattr('metadata.name', 'equalto', serveguard_isvc) | first | default(none) }}

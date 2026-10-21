@@ -4,41 +4,39 @@
 # `make demo-up` and `make demo-stories`. The integration's `make env-up` is not
 # used: this playbook owns the platform.
 #
+# Every step is guarded (roles/serveguard_checks): its preconditions are checked
+# first, a step whose end state already holds is skipped ("SATISFIED"), a
+# conflicting existing resource stops the run before anything is changed, and
+# the postconditions are checked with bounded waits and diagnostics.
+# Run playbooks/serveguard-demo-preflight.yml first to see every check at once.
+#
 # Usage:
 #   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
 #   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
 #
 # Options:
-#   -e rhoai_channel=stable-3.6               # RHOAI 3.6 once GA
+#   -e rhoai_channel=stable-3.6                 # RHOAI 3.6 once GA (+ serveguard_allow_channel_change=true on a 3.5 install)
 #   -e serveguard_repo_dir=/path/to/serveguard  # default: ../serveguard (sibling checkout)
-#   -e serveguard_run_stories=false           # stop after the admitted service is Ready
+#   -e serveguard_run_stories=false             # stop after the admitted service is Ready
 
 - name: ServeGuard demo (cluster + platform + demo)
   hosts: localhost
-  pre_tasks:
+  vars:
+    serveguard_checks_mode: enforce
+  tasks:
     - name: Require a serveguard scenario
       ansible.builtin.assert:
-        that: serveguard_accelerator is defined and ai_platform_mode == 'standard'
+        that: serveguard_pool_name is defined and ai_platform_mode == 'standard'
         fail_msg: "Pass a scenario: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
-  roles:
-    - role: login
-    - role: rosa_cluster
-    - role: cluster_access
-    - role: gpu_machinepool          # the serving pool (CPU or GPU), untainted
-      vars:
-        gpu_pool_name: "{{ serveguard_pool_name }}"
-        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
-        gpu_pool_taint: ""
-    - role: operators
-    - role: gpu_stack
-      vars:
-        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
-      when: serveguard_accelerator == 'nvidia'
-    - role: ai_platform
-    - role: serveguard_demo
-  tasks:
-    - name: Run the ServeGuard stories
+
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    - name: Log in
       ansible.builtin.include_role:
-        name: serveguard_demo
-        tasks_from: stories
-      when: serveguard_run_stories | default(true) | bool
+        name: login
+
+    - name: Run the ServeGuard steps
+      ansible.builtin.include_tasks: includes/serveguard-demo-steps.yml

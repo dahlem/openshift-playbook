@@ -1,0 +1,24 @@
+---
+# Read-only: the ROSA cluster, and whether oc talks to it.
+
+- name: Read the cluster
+  ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+  register: _sg_cluster_out
+  changed_when: false
+  failed_when: false
+
+- name: Read the oc session
+  ansible.builtin.command: oc whoami --show-server
+  register: _sg_oc_server
+  changed_when: false
+  failed_when: false
+
+- name: Collect cluster facts
+  ansible.builtin.set_fact:
+    _sg_raw_cluster:
+      exists: "{{ _sg_cluster_out.rc == 0 }}"
+      cluster: "{{ (_sg_cluster_out.stdout | from_json) if _sg_cluster_out.rc == 0 else {} }}"
+    # oc is usable for cluster-side checks only when it points at this cluster.
+    _sg_cluster_reachable: >-
+      {{ _sg_cluster_out.rc == 0 and _sg_oc_server.rc == 0 and
+         ((_sg_cluster_out.stdout | from_json).api.url | default('-')) in _sg_oc_server.stdout }}

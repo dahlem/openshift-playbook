@@ -1,0 +1,33 @@
+---
+# Post: the cluster is ready at a supported version and oc talks to it.
+- name: "post cluster: wait for ready"
+  block:
+    - name: Wait for the cluster to be ready
+      ansible.builtin.command: rosa describe cluster --cluster={{ rosa_cluster_name }} -o json
+      register: _sg_wait
+      until: _sg_wait.rc == 0 and (_sg_wait.stdout | from_json).status.state == 'ready'
+      retries: "{{ (serveguard_wait_cluster | int / 30) | int }}"
+      delay: 30
+      changed_when: false
+  rescue:
+    - name: Diagnose the cluster
+      ansible.builtin.include_tasks: _diagnose.yml
+      vars:
+        _sg_diag_title: "cluster {{ rosa_cluster_name }} not ready within {{ serveguard_wait_cluster }}s"
+        _sg_diag_cmds:
+          - "rosa describe cluster --cluster={{ rosa_cluster_name }}"
+          - "rosa logs install --cluster={{ rosa_cluster_name }} --tail 30"
+
+- name: "post cluster: re-read and decide"
+  ansible.builtin.include_tasks: pre_cluster.yml
+  vars:
+    serveguard_checks_mode: enforce
+
+- name: Assert the cluster postcondition
+  ansible.builtin.assert:
+    that:
+      - _sg_cluster.action == 'satisfied'
+      - _sg_cluster_reachable | bool
+    fail_msg: >-
+      Cluster {{ rosa_cluster_name }}: action={{ _sg_cluster.action }}, oc reachable={{ _sg_cluster_reachable }}.
+      oc must be logged in to {{ _sg_cluster.api_url | default('the cluster API') }} (the login role does this).

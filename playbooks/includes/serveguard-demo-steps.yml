@@ -1,0 +1,133 @@
+---
+# The guarded ServeGuard steps, shared by serveguard-demo.yml and
+# serveguard-demo-on-cluster.yml. Each step: pre (decide) -> role (only when
+# needed) -> post (verify).
+
+# ---- local tools, AWS account, cluster, pool, quotas ---------------------------------
+- name: Check local tools
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_local }
+
+- name: Check the AWS account (bootstrap output)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_aws }
+
+- name: Check the cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_cluster }
+
+- name: Check the serving pool
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_pool }
+
+- name: Check quotas, instance types and the serving node size
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_quota }
+
+- name: Create or wait for the cluster
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  when: _sg_cluster.action in ['create', 'wait']
+
+- name: Log in to the cluster
+  ansible.builtin.include_role:
+    name: login
+  when: _sg_cluster.action in ['create', 'wait'] or not (_sg_cluster_reachable | bool)
+
+- name: Verify the cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_cluster }
+
+- name: Grant OCM access
+  ansible.builtin.include_role:
+    name: cluster_access
+
+- name: Re-check the serving pool against the live cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_pool }
+
+- name: Create or wait for the serving pool
+  ansible.builtin.include_role:
+    name: gpu_machinepool
+  vars:
+    gpu_pool_name: "{{ serveguard_pool_name }}"
+    gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+    gpu_pool_taint: ""
+  when: _sg_pool.action in ['create', 'wait']
+
+- name: Verify the serving pool
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_pool }
+
+# ---- operators, GPU stack, platform -------------------------------------------------
+- name: Check the operators
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_operators }
+
+- name: Install the missing operators
+  ansible.builtin.include_role:
+    name: operators
+  vars:
+    operators_subset: "{{ _sg_operators.subset }}"
+    operators_existing_operator_groups: "{{ _sg_operators.existing_operator_groups }}"
+    operators_apply_channel_change: "{{ _sg_operators.apply_channel_change }}"
+  when: _sg_operators.subset | length > 0
+
+- name: Verify the operators
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_operators }
+
+- name: GPU stack
+  when: serveguard_accelerator == 'nvidia'
+  block:
+    - name: Check the GPU stack
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_gpu_stack }
+
+    - name: Configure the GPU stack
+      ansible.builtin.include_role:
+        name: gpu_stack
+      vars:
+        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+      when: _sg_gpu_stack.action == 'install'
+
+    - name: Verify the GPU stack
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_gpu_stack }
+
+- name: Check the DataScienceCluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_platform }
+
+- name: Create or update the DataScienceCluster
+  ansible.builtin.include_role:
+    name: ai_platform
+  when: _sg_platform.action in ['create', 'wait', 'update']
+
+- name: Verify the platform
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_platform }
+
+# ---- demo ---------------------------------------------------------------------------
+- name: Check the internal image registry
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_registry }
+
+- name: Check storage
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_storage }
+
+- name: Check cluster capacity for the demo
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_capacity }
+
+- name: Check the demo
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_demo }
+
+- name: Run make demo-up
+  ansible.builtin.include_role:
+    name: serveguard_demo
+  when: _sg_demo.action == 'deploy'
+
+- name: Verify the demo
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_demo }
+
+- name: Stories
+  when: serveguard_run_stories | bool
+  block:
+    - name: Check the admitted service before the stories
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_stories }
+
+    - name: Run make demo-stories
+      ansible.builtin.include_role:
+        name: serveguard_demo
+        tasks_from: stories
+
+    - name: Verify the stories
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_stories }
+
+- name: Summary of all checks
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }

@@ -1,0 +1,7 @@
+---
+- name: Evaluate the integrated image registry
+  ansible.builtin.set_fact:
+    _sg_result: "{{ _sg_raw_registry | sg_eval_registry({'needed': serveguard_image | length == 0}) }}"
+
+- name: Record registry checks
+  ansible.builtin.include_tasks: _record.yml

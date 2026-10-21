@@ -1,0 +1,21 @@
+---
+# Print every recorded check as a table; in report mode, fail if any is blocking.
+
+- name: Count check results
+  ansible.builtin.set_fact:
+    _sg_blocking: "{{ _sg_checks | default([]) | selectattr('status', 'in', ['fail', 'conflict']) | list }}"
+
+- name: ServeGuard checks
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['', '%-21s %-38s %-9s %s' | format('STEP', 'CHECK', 'STATUS', 'DETAIL'), '-' * 120]
+         + (_sg_checks | default([]) | map('serveguard_row') | list)
+         + ['', ('%d checks, %d blocking.' | format(_sg_checks | default([]) | length, _sg_blocking | length))
+                ~ (' Fix the FAIL/CONFLICT rows, then deploy.' if _sg_blocking else ' Ready to deploy.'), ''] }}
+
+- name: Fail when a check is blocking
+  ansible.builtin.fail:
+    msg: "{{ _sg_blocking | length }} blocking check(s); see the table above."
+  when:
+    - serveguard_checks_mode == 'report'
+    - _sg_blocking | length > 0

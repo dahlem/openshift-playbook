@@ -1,0 +1,13 @@
+---
+- name: "pre local: read state"
+  ansible.builtin.include_tasks: _gather_local.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre local: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_local: "{{ serveguard_checks_fixtures.local }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre local: decide"
+  ansible.builtin.include_tasks: _evaluate_local.yml

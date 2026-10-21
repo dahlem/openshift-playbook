@@ -1,0 +1,19 @@
+---
+# Post: independent of make's output, every refusal left nothing behind, the
+# refused admissions failed, and the admitted service is back, unchanged.
+- name: "post stories: re-read"
+  ansible.builtin.include_tasks: _gather_demo_post.yml
+
+- name: "post stories: evaluate"
+  ansible.builtin.include_tasks: _evaluate_demo_post.yml
+  vars:
+    serveguard_checks_mode: report
+    _sg_refused_names: [story-unadmitted, story-forged-verdict, story-read-factor, story-certificate]
+    _sg_refused_jobs: [story-admit-read-factor, story-admit-certificate]
+
+- name: Diagnose a failed story postcondition
+  ansible.builtin.include_tasks: _diagnose.yml
+  vars:
+    _sg_diag_title: "story postconditions failed: {{ _sg_result.rows | selectattr('status', 'equalto', 'fail') | map(attribute='check') | join(', ') }}"
+    _sg_diag_cmds: "{{ _sg_demo_diag }}"
+  when: _sg_result.rows | selectattr('status', 'in', ['fail', 'conflict']) | list | length > 0

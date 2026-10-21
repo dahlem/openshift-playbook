@@ -1,0 +1,14 @@
+{
+ "metadata": {
+  "namespace": "cert-manager-operator",
+  "name": "openshift-cert-manager-operator"
+ },
+ "spec": {
+  "name": "openshift-cert-manager-operator",
+  "channel": "stable-v1",
+  "source": "redhat-operators"
+ },
+ "status": {
+  "installedCSV": "cert-manager-operator.v1.17.0"
+ }
+}

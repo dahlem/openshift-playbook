@@ -1,0 +1,23 @@
+---
+- name: Read the image registry config
+  kubernetes.core.k8s_info:
+    api_version: imageregistry.operator.openshift.io/v1
+    kind: Config
+    name: cluster
+  register: _sg_reg_cfg
+  when: _sg_cluster_reachable | bool and serveguard_image | length == 0
+
+- name: Read the image registry deployment
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: openshift-image-registry
+    name: image-registry
+  register: _sg_reg_dep
+  when: _sg_cluster_reachable | bool and serveguard_image | length == 0
+
+- name: Collect registry facts
+  ansible.builtin.set_fact:
+    _sg_raw_registry:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      config: "{{ _sg_reg_cfg.resources | default([]) | first | default(none) }}"
+      deployment: "{{ _sg_reg_dep.resources | default([]) | first | default(none) }}"

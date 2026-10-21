@@ -1,0 +1,33 @@
+---
+# Post: the serving pool has a Ready node of the requested type.
+- name: "post pool: wait for a Ready node"
+  block:
+    - name: Wait for a Ready serving node
+      kubernetes.core.k8s_info:
+        kind: Node
+        label_selectors:
+          - "node.kubernetes.io/instance-type={{ serveguard_pool_instance_type }}"
+      register: _sg_wait
+      until: >-
+        _sg_wait.resources | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length > 0
+      retries: "{{ (serveguard_wait_node | int / 15) | int }}"
+      delay: 15
+  rescue:
+    - name: Diagnose the serving pool
+      ansible.builtin.include_tasks: _diagnose.yml
+      vars:
+        _sg_diag_title: "no Ready {{ serveguard_pool_instance_type }} node in pool {{ serveguard_pool_name }} within {{ serveguard_wait_node }}s"
+        _sg_diag_cmds:
+          - "rosa describe machinepool {{ serveguard_pool_name }} --cluster={{ rosa_cluster_name }}"
+          - "oc get nodes -L node.kubernetes.io/instance-type"
+          - "oc get events -A --field-selector involvedObject.kind=Node --sort-by=.lastTimestamp"
+
+- name: "post pool: re-read and decide"
+  ansible.builtin.include_tasks: pre_pool.yml
+  vars:
+    serveguard_checks_mode: enforce
+
+- name: Assert the pool postcondition
+  ansible.builtin.assert:
+    that: _sg_pool.action in ['satisfied', 'accept']
+    fail_msg: "Pool {{ serveguard_pool_name }}: {{ _sg_pool.rows | map(attribute='detail') | join('; ') }}"

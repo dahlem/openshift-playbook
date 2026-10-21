@@ -1,0 +1,25 @@
+GET /v1/models
+{"object":"list","data":[{"id":"serveguard-demo"},{"id":"serveguard-adapter"}]}
+POST /v1/completions model=serveguard-adapter
+{"id":"cmpl-1","choices":[{"index":0,"text":" a platform for building and serving models"}]}
+== refusal: an InferenceService without a ServeGuard verdict
+    | The inferenceservices "story-unadmitted" is invalid: : ValidatingAdmissionPolicy 'serveguard-admitted-adapters-serveguard-demo' with binding 'x' denied request: adapter must be admitted by ServeGuard
+    => denied, as expected
+== refusal: a verdict written by anyone but the receiver
+    | ... denied request: only the ServeGuard receiver (system:serviceaccount:serveguard-demo:serveguard-receiver) may create
+    => denied, as expected
+== refusal: changing the admitted service's adapter digest
+    | ... denied request: only the ServeGuard receiver may change its spec or ServeGuard verdict
+    => denied, as expected
+== refusal: an adapter whose read factor sees past the monitor
+oc -n serveguard-demo wait job/story-admit-read-factor --for=condition=Failed --timeout=20m
+job.batch/story-admit-read-factor condition met
+    | {"admitted": false, "reason": "layer 0: served (A, C, rho) do not open the commitment"}
+== refusal: a recommitted package (certificate) under a new root
+job.batch/story-admit-certificate condition met
+    | {"admitted": false, "reason": "package root does not match trusted identity"}
+== refusal: adapter bytes changed after admission; the predictor never restarts serving
+serveguard-demo-predictor-abc   0/1   Init:CrashLoopBackOff   2
+    | serveguard: REFUSED: adapter bytes differ from the admitted adapter digest
+== restore the admitted adapter bytes; the guard admits them again
+inferenceservice.serving.kserve.io/serveguard-demo condition met

@@ -11,7 +11,7 @@
   pre_tasks:
     - name: Require a serveguard scenario
       ansible.builtin.assert:
-        that: serveguard_accelerator is defined and ai_platform_mode == 'standard'
+        that: serveguard_pool_name is defined and ai_platform_mode == 'standard'
         fail_msg: "Pass the scenario you deployed: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
   roles:
     - role: login

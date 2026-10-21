@@ -1,0 +1,79 @@
+---
+# Read-only: AWS session, ROSA login, and the site.yml identifiers bootstrap wrote
+# (OIDC config, account roles, subnets). This is bootstrap's postcondition.
+
+- name: Read AWS identity
+  ansible.builtin.command: aws sts get-caller-identity --output json --region {{ aws_region | default('us-east-1') }}
+  register: _sg_aws_id
+  changed_when: false
+  failed_when: false
+
+- name: Read ROSA login
+  ansible.builtin.command: rosa whoami
+  register: _sg_rosa_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Read OIDC configs
+  ansible.builtin.command: rosa list oidc-config -o json
+  register: _sg_oidc
+  changed_when: false
+  failed_when: false
+  when: _sg_rosa_whoami.rc == 0
+
+- name: Read account roles
+  ansible.builtin.command: aws iam get-role --role-name {{ item.value | regex_replace('^.*/', '') }} --output json
+  register: _sg_roles
+  changed_when: false
+  failed_when: false
+  loop: "{{ _sg_role_arns | dict2items | selectattr('value') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: _sg_aws_id.rc == 0
+  vars:
+    _sg_role_arns:
+      installer: "{{ rosa_installer_role | default('') }}"
+      support: "{{ rosa_support_role | default('') }}"
+      worker: "{{ rosa_worker_role | default('') }}"
+
+- name: Read the ELB service-linked role
+  ansible.builtin.command: aws iam get-role --role-name AWSServiceRoleForElasticLoadBalancing --output json
+  register: _sg_elb_role
+  changed_when: false
+  failed_when: false
+  when: _sg_aws_id.rc == 0
+
+- name: Read subnets
+  ansible.builtin.command: >-
+    aws ec2 describe-subnets --subnet-ids {{ item }} --output json --region {{ aws_region }}
+  register: _sg_subnets
+  changed_when: false
+  failed_when: false
+  loop: "{{ [rosa_private_subnet | default(''), rosa_public_subnet | default('')] | select | list }}"
+  when: _sg_aws_id.rc == 0
+
+- name: Count private subnet tags
+  ansible.builtin.command: >-
+    aws ec2 describe-tags --filters "Name=resource-id,Values={{ rosa_private_subnet }}"
+    --query 'Tags | length(@)' --region {{ aws_region }}
+  register: _sg_tags
+  changed_when: false
+  failed_when: false
+  when: _sg_aws_id.rc == 0 and (rosa_private_subnet | default('') | length > 0)
+
+- name: Collect AWS facts
+  ansible.builtin.set_fact:
+    _sg_raw_aws:
+      identity: "{{ (_sg_aws_id.stdout | from_json) if _sg_aws_id.rc == 0 else none }}"
+      rosa_logged_in: "{{ _sg_rosa_whoami.rc == 0 }}"
+      rosa_account: "{{ _sg_rosa_whoami.stdout_lines | select('search', 'OCM Account Username') | first | default('') }}"
+      oidc_configs: "{{ (_sg_oidc.stdout | from_json) if (_sg_oidc.rc | default(1)) == 0 else [] }}"
+      roles: >-
+        {{ {'installer': rosa_installer_role | default(''),
+            'support': rosa_support_role | default(''),
+            'worker': rosa_worker_role | default('')} | sg_role_presence(_sg_roles.results | default([])) }}
+      elb_role: "{{ (_sg_elb_role.rc | default(1)) == 0 }}"
+      subnets: >-
+        {{ _sg_subnets.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+           | map(attribute='stdout') | map('from_json') | map(attribute='Subnets') | flatten }}
+      tag_count: "{{ (_sg_tags.stdout | int) if (_sg_tags.rc | default(1)) == 0 else none }}"

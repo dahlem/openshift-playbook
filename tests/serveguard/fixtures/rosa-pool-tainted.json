@@ -1,0 +1,25 @@
+{
+ "id": "sg-cpu",
+ "kind": "NodePool",
+ "aws_node_pool": {
+  "instance_type": "m6i.2xlarge"
+ },
+ "autoscaling": {
+  "min_replica": 1,
+  "max_replica": 1
+ },
+ "labels": {
+  "node.kubernetes.io/instance-type": "m6i.2xlarge"
+ },
+ "subnet": "subnet-priv",
+ "status": {
+  "current_replicas": 1
+ },
+ "taints": [
+  {
+   "key": "nvidia.com/gpu",
+   "value": "present",
+   "effect": "NoSchedule"
+  }
+ ]
+}

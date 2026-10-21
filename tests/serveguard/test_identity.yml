@@ -1,0 +1,76 @@
+---
+# Offline: with the default config (no scenario), the operators role resolves to
+# exactly the namespaces, OperatorGroups, Subscriptions, channels, CRDs and
+# teardown order it had before it became data-driven (the literals below are
+# the pre-change hardcoded lists), and the new hooks are inert.
+- name: Mistral/Knative behaviour identity (offline)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
+
+    - name: Load the operators install topology
+      ansible.builtin.include_vars: { file: "{{ playbook_dir }}/../../roles/operators/defaults/main.yml" }
+
+    - name: Resolve like the operators role does
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/operators/tasks/_resolve.yml"
+
+    - name: Derive what deploy.yml and teardown.yml loop over
+      ansible.builtin.set_fact:
+        got:
+          namespaces: "{{ _operators | map(attribute='namespaces') | flatten }}"
+          # same filter as deploy.yml "Create namespaced operator groups"
+          operator_groups: >-
+            {{ _operators | selectattr('operator_group', 'defined')
+               | rejectattr('subscription.namespace', 'in', operators_existing_operator_groups | default([]))
+               | map(attribute='subscription.namespace') | list }}
+          og_specs: "{{ _operators | selectattr('operator_group', 'defined') | map(attribute='operator_group') | list }}"
+          subs: "{{ _operators | map(attribute='subscription') | list }}"
+          channels: "{{ _operators | map(attribute='channel') | list }}"
+          packages: "{{ _operators | map(attribute='package') | list }}"
+          crds: "{{ _operators | map(attribute='crds') | flatten | map(attribute='crd') | list }}"
+          teardown_subs: "{{ _operators | reverse | map(attribute='subscription.name') | list }}"
+          teardown_csv_ns: "{{ _operators | reverse | map(attribute='subscription.namespace') | list }}"
+
+    - name: Default config equals the pre-change hardcoded lists
+      ansible.builtin.assert:
+        that:
+          - got.namespaces == ['openshift-nfd', 'nvidia-gpu-operator', 'openshift-serverless', 'istio-system', 'redhat-ods-operator']
+          - got.operator_groups == ['openshift-nfd', 'nvidia-gpu-operator', 'openshift-serverless', 'redhat-ods-operator']
+          - >-
+            got.og_specs == [{'targetNamespaces': ['openshift-nfd']}, {'targetNamespaces': ['nvidia-gpu-operator']}, {}, {}]
+          - >-
+            got.subs == [{'name': 'nfd', 'namespace': 'openshift-nfd'},
+                         {'name': 'gpu-operator-certified', 'namespace': 'nvidia-gpu-operator'},
+                         {'name': 'serverless-operator', 'namespace': 'openshift-serverless'},
+                         {'name': 'servicemeshoperator', 'namespace': 'openshift-operators'},
+                         {'name': 'rhods-operator', 'namespace': 'redhat-ods-operator'}]
+          - got.channels == ['stable', 'v25.3', 'stable', 'stable', 'stable']
+          - got.packages == ['nfd', 'gpu-operator-certified', 'serverless-operator', 'servicemeshoperator', 'rhods-operator']
+          - >-
+            got.crds == ['nodefeaturediscoveries.nfd.openshift.io', 'clusterpolicies.nvidia.com',
+                         'dscinitializations.dscinitialization.opendatahub.io',
+                         'datascienceclusters.datasciencecluster.opendatahub.io']
+          - got.teardown_subs == ['rhods-operator', 'servicemeshoperator', 'serverless-operator', 'gpu-operator-certified', 'nfd']
+          - >-
+            got.teardown_csv_ns == ['redhat-ods-operator', 'openshift-operators', 'openshift-serverless',
+                                    'nvidia-gpu-operator', 'openshift-nfd']
+          - ai_platform_mode == 'serverless'
+          - gpu_pool_taint == 'nvidia.com/gpu=present:NoSchedule'
+          # The hooks the ServeGuard playbooks pass are unset by default.
+          - operators_subset is not defined
+          - operators_existing_operator_groups is not defined
+          - operators_apply_channel_change is not defined
+
+    - name: No Mistral/Knative scenario or playbook sets a ServeGuard hook
+      ansible.builtin.command:
+        cmd: >-
+          grep -rlE 'operators_subset|operators_existing_operator_groups|operators_apply_channel_change|ai_platform_mode|operators_enabled'
+          scenarios/mistral-7b scenarios/mistral-small-24b scenarios/llama-3-70b scenarios/deepseek-r1-70b
+          playbooks/llm-endpoint.yml playbooks/llm-endpoint-on-cluster.yml playbooks/llm-endpoint-teardown.yml
+          playbooks/llm-endpoint-llmd.yml playbooks/llm-endpoint-llmd-teardown.yml playbooks/step-operators.yml playbooks/step-ai-platform.yml
+        chdir: "{{ playbook_dir }}/../.."
+      register: _hooks
+      changed_when: false
+      failed_when: _hooks.rc not in [0, 1] or _hooks.stdout | length > 0

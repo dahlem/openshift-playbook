@@ -1,0 +1,49 @@
+[
+ {
+  "metadata": {
+   "name": "ip-10-0-1-1",
+   "labels": {
+    "node.kubernetes.io/instance-type": "m5.2xlarge"
+   }
+  },
+  "spec": {},
+  "status": {
+   "allocatable": {
+    "cpu": "7500m",
+    "memory": "30000Mi",
+    "ephemeral-storage": "300Gi",
+    "pods": "250"
+   },
+   "conditions": [
+    {
+     "type": "Ready",
+     "status": "True"
+    }
+   ]
+  }
+ },
+ {
+  "metadata": {
+   "name": "ip-10-0-2-1",
+   "labels": {
+    "node.kubernetes.io/instance-type": "g6.2xlarge"
+   }
+  },
+  "spec": {},
+  "status": {
+   "allocatable": {
+    "cpu": "7500m",
+    "memory": "30000Mi",
+    "ephemeral-storage": "300Gi",
+    "pods": "250",
+    "nvidia.com/gpu": "1"
+   },
+   "conditions": [
+    {
+     "type": "Ready",
+     "status": "True"
+    }
+   ]
+  }
+ }
+]
