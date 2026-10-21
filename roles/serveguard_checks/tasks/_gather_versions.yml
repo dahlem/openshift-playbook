@@ -1,0 +1,13 @@
+---
+# Read-only: the OpenShift versions ROSA HCP offers (for a cluster this run creates).
+- name: Read ROSA HCP versions
+  ansible.builtin.command: rosa list versions --hosted-cp -o json
+  register: _sg_versions_out
+  changed_when: false
+  failed_when: false
+
+- name: Collect version facts
+  ansible.builtin.set_fact:
+    _sg_raw_versions:
+      cluster_exists: "{{ _sg_raw_cluster.exists | default(false) | bool }}"
+      versions: "{{ (_sg_versions_out.stdout | from_json) if _sg_versions_out.rc == 0 else none }}"

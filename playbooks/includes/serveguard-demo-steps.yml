@@ -11,10 +11,19 @@
 - name: Read the workload requests from the serveguard collection
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
 
+- name: Check the approved SRS file (local, never downloaded)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_srs }
+
 - name: Check the AWS account (bootstrap output)
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_aws }
 
 - name: Check the cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_cluster }
+
+- name: Pick the OpenShift version for a new cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_versions }
+
+- name: Re-check the cluster with that version
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_cluster }
 
 - name: Check the serving pool
@@ -26,6 +35,8 @@
 - name: Create or wait for the cluster
   ansible.builtin.include_role:
     name: rosa_cluster
+  vars:
+    rosa_openshift_version: "{{ _sg_versions.version | default(_sg_cluster.version, true) }}"
   when: _sg_cluster.action in ['create', 'wait']
 
 - name: Log in to the cluster

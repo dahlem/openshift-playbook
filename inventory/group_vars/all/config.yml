@@ -71,7 +71,8 @@ batch_workflow_namespace: batch-experiments
 # platform checks read them from the collection (serveguard_checks pre_workload),
 # and a scenario or -e that sets one of these variables overrides it for both.
 serveguard_collection: serveguard.openshift_ai
-serveguard_collection_roles: [preflight, trust_anchor, receiver_image, publisher, public_verifier, serving_consumer, stories, teardown]
+# Every collection variable is defined once, in roles/common/defaults/main.yml.
+serveguard_collection_roles: [common]
 # Workload variables the platform checks need -> their names in the collection.
 serveguard_workload_vars:
   predictor_cpu: serveguard_predictor_cpu            # collection default "4"
@@ -80,15 +81,34 @@ serveguard_workload_vars:
   receiver_image: serveguard_image                   # "" = in-cluster build -> internal registry
   storage_class: serveguard_storage_class            # "" = the cluster default
   store_access_mode: serveguard_store_access_mode
+  publisher_namespace: serveguard_publisher_namespace  # sg-publisher
+  verifier_namespace: serveguard_verifier_namespace    # sg-verifier
   # Other workloads: serveguard_<workload>_cpu / _memory
   build_cpu: serveguard_receiver_build_cpu           # receiver image build
   build_memory: serveguard_receiver_build_memory
-  job_cpu: serveguard_job_cpu                        # publisher / verifier / story Jobs
+  job_cpu: serveguard_job_cpu                        # fetch-base, loaders, story prepare Jobs
   job_memory: serveguard_job_memory
   guard_cpu: serveguard_guard_cpu                    # guard init-container of the predictor
   guard_memory: serveguard_guard_memory
+  approve_cpu: serveguard_approve_cpu                # verifier derives its circuits (~11.5 GB peak)
+  approve_memory: serveguard_approve_memory
+  publish_cpu: serveguard_publish_cpu                # publisher proves (~12.4 GB peak)
+  publish_memory: serveguard_publish_memory
+  admit_cpu: serveguard_admit_cpu                    # verifier admits
+  admit_memory: serveguard_admit_memory
+  work_size: serveguard_work_size                    # emptyDir for proving keys (publish, approve)
+  logrows: serveguard_logrows                        # names the SRS (kzg<logrows>.srs)
 # These must be in the collection's defaults (or overridden); the rest are optional.
-serveguard_workload_required: [predictor_cpu, predictor_memory]
+serveguard_workload_required: [predictor_cpu, predictor_memory, publish_cpu, publish_memory, approve_cpu, approve_memory]
+# Environment bindings the collection needs from this checkout layout (not workload
+# defaults): the serveguard checkout (receiver_image builds from it) and its CLI.
+serveguard_repo_dir: "{{ (playbook_dir ~ '/../../serveguard') | realpath }}"
+serveguard_cli: "uv run --project {{ serveguard_repo_dir }}/integrations/openshift-ai --frozen serveguard-openshift-ai"
+# The approved KZG SRS is site-specific: set serveguard_srs_path and
+# serveguard_srs_sha256 in inventory/group_vars/all/site.yml or with -e.
+# OpenShift range for RHOAI 3.5 (versions.yml serveguard.requirements.openshift):
+#   guide (both sources agree, latest 4.20.z) | article (up to 4.22.z)
+serveguard_openshift_range: guide
 serveguard_run_stories: true
 # Platform-side sizing (not workload settings):
 serveguard_min_node_ephemeral: 30Gi          # vLLM image + model on the predictor's node

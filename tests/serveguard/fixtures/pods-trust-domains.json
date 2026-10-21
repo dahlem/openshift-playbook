@@ -1,0 +1,71 @@
+[
+ {
+  "metadata": {
+   "namespace": "sg-publisher",
+   "name": "serveguard-publish-x"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-1",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "16Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "sg-verifier",
+   "name": "serveguard-approve-x"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-2",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "16Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "serveguard-demo",
+   "name": "serveguard-demo-predictor-x"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-3",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "8Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ }
+]

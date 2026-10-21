@@ -1,4 +1,0 @@
----
-- name: "stub public_verifier: record the call"
-  ansible.builtin.set_fact:
-    stub_calls: "{{ (stub_calls | default([])) + ['public_verifier'] }}"

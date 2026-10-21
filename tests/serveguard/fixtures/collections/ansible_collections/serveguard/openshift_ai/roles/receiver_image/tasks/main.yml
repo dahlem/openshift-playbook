@@ -1,4 +1,4 @@
 ---
-- name: "stub receiver_image: record the call"
+- name: "stub receiver_image main: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['receiver_image'] }}"

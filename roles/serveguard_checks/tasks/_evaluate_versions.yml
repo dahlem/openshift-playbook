@@ -1,0 +1,16 @@
+---
+- name: Pick the OpenShift version for a new cluster
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_versions | sg_eval_versions({
+           'range': serveguard_openshift_range,
+           'min': versions.serveguard.requirements.openshift[serveguard_openshift_range].min,
+           'max_exclusive': versions.serveguard.requirements.openshift[serveguard_openshift_range].max_exclusive,
+           'channel_group': 'stable' }) }}
+
+- name: Keep the version decision
+  ansible.builtin.set_fact:
+    _sg_versions: "{{ _sg_result }}"
+
+- name: Record version checks
+  ansible.builtin.include_tasks: _record.yml

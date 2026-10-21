@@ -21,6 +21,9 @@
     rhoai_channel: stable-3.5
     ai_platform_mode: standard
     serveguard_accelerator: cpu
+    serveguard_openshift_range: guide
+    serveguard_srs_path: /home/demo/.ezkl/srs/kzg19.srs
+    serveguard_srs_sha256: "{{ 'ab' * 32 }}"
   tasks:
     - name: Load version constraints
       ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
@@ -49,6 +52,8 @@
         that:
           - _sg_blocking | length == 0
           - _sg_cluster.action == 'create'
+          - _sg_versions.version == '4.20.12'
+          - _sg_checks | selectattr('step', 'equalto', 'cluster') | map(attribute='detail') | first is search('OpenShift 4.20.12')
           - _sg_pool.action == 'create'
           - _sg_operators.subset == ['cert_manager', 'rhoai']
           - _sg_platform.action == 'create'
@@ -105,7 +110,7 @@
               - "'blocking check(s)' in ansible_failed_result.msg"
               # capacity is N/A, not FAIL: the serving pool that would hold the predictor is still TODO
               - _blocked | sort == ['cluster/version', 'operator rhoai/Subscription', 'platform/DataScienceCluster'] | sort
-              - _sg_checks | selectattr('step', 'equalto', 'capacity') | selectattr('status', 'equalto', 'n/a') | list | length == 2
+              - _sg_checks | selectattr('step', 'equalto', 'capacity') | selectattr('status', 'equalto', 'n/a') | map(attribute='check') | sort == ['predictor (+guard init)', 'predictor + story Job', 'publisher prove Job', 'verifier approve Job']
             fail_msg: "{{ _blocked }}"
           vars:
             _blocked: >-

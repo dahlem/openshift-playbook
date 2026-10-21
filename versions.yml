@@ -65,8 +65,15 @@ serveguard:
   gpu_instance_type: g6.2xlarge
   # What the ServeGuard checks (roles/serveguard_checks) require.
   requirements:
-    # RHOAI 3.5 on OpenShift 4.19.9-4.22 (Supported Configurations for 3.x).
-    openshift: { min: "4.19.9", max_exclusive: "4.23" }
+    # OpenShift for RHOAI 3.5. The sources disagree: the 3.5 installation guide says
+    # 4.19 to 4.20; the "Supported Configurations for 3.x" article says 4.19.9 to 4.22.
+    #   guide   (default): what both support -> the latest 4.20.z ROSA HCP offers
+    #   article (override, serveguard_openshift_range=article): up to 4.22.z
+    # The ServeGuard playbooks pick the version from `rosa list versions --hosted-cp`;
+    # cluster.openshift_version above stays the pin for the other scenarios.
+    openshift:
+      guide: { min: "4.19.9", max_exclusive: "4.21" }
+      article: { min: "4.19.9", max_exclusive: "4.23" }
     # Minimum local CLI versions; null = must be present, any version.
     # (make, uv and the workload's own tools are checked by serveguard.openshift_ai.preflight.)
     cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", ocm: null }

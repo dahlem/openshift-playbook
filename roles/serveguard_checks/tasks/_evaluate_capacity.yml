@@ -3,12 +3,15 @@
 # serveguard.openshift_ai collection's role defaults (pre_workload -> _sg_workload,
 # serveguard_<workload>_cpu/_memory), checked against free allocatable on Ready,
 # untainted nodes. A workload whose pair is missing is left out (pre_workload
-# warned). The demo namespace's own pods are not counted as used.
+# warned). The three trust-domain namespaces' own pods are not counted as used
+# (a redeploy replaces them).
 - name: Evaluate cluster capacity
   ansible.builtin.set_fact:
     _sg_result: >-
       {{ _sg_raw_capacity | sg_eval_capacity({
-           'namespace': _sg_workload.namespace | default('serveguard-demo'),
+           'namespaces': [_sg_workload.namespace | default('serveguard-demo'),
+                          _sg_workload.publisher_namespace | default('sg-publisher'),
+                          _sg_workload.verifier_namespace | default('sg-verifier')],
            'pool_pending': (_sg_pool.action | default('satisfied')) in ['create', 'wait'],
            'demands': _sg_workload | sg_workload_demands(serveguard_accelerator, serveguard_min_node_ephemeral) }) }}
   when: _sg_workload.predictor_cpu is defined and _sg_workload.predictor_memory is defined

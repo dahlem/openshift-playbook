@@ -14,7 +14,8 @@ cases:
     step: workload
     raw:
       collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
-      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_cpu: 500m, serveguard_job_memory: 1Gi }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_cpu: 500m, serveguard_job_memory: 1Gi,
+                  serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi, serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
       overrides: {}
     expect: { blocking: false, status: { serveguard_predictor_cpu: ok, serveguard_receiver_build_cpu: warn }, detail: ["4 (collection default)"] }
 
@@ -22,7 +23,8 @@ cases:
     step: workload
     raw:
       collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
-      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
       overrides: { serveguard_predictor_cpu: "6" }
     expect: { blocking: false, detail: ["6 (override; passed to the collection)"] }
 
@@ -37,7 +39,7 @@ cases:
       collection: { name: serveguard.openshift_ai, version: "0.0.1", path: /c/serveguard/openshift_ai }
       defaults: {}
       overrides: {}
-    expect: { blocking: true, status: { serveguard_predictor_cpu: fail, serveguard_predictor_memory: fail } }
+    expect: { blocking: true, status: { serveguard_predictor_cpu: fail, serveguard_predictor_memory: fail, serveguard_publish_memory: fail } }
 
   # ---- local tools -------------------------------------------------------------------
   - name: local tools present and new enough
@@ -105,11 +107,58 @@ cases:
     raw: { identity: null }
     expect: { blocking: true, status: { session: fail } }
 
+  # ---- approved SRS (local file) -------------------------------------------------------
+  - name: approved SRS present with the configured digest
+    step: srs
+    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: false, status: { approved SRS file: ok } }
+
+  - name: SRS with another digest -> fail
+    step: srs
+    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'cd' * 32 }}" }
+    expect: { blocking: true, status: { approved SRS file: fail }, detail: ["not the approved"] }
+
+  - name: SRS not supplied -> fail with how to supply it (never downloaded)
+    step: srs
+    vars: { serveguard_srs_sha256: "" }
+    raw: { path: "", exists: false, sha256: "" }
+    expect: { blocking: true, status: { approved digest: fail, approved SRS file: fail }, detail: ["kzg19.srs", "never downloaded"] }
+
+  - name: SRS path missing on disk -> fail
+    step: srs
+    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: /nope/kzg19.srs, exists: false, sha256: "" }
+    expect: { blocking: true, status: { approved SRS file: fail }, detail: ["/nope/kzg19.srs not found"] }
+
+  # ---- OpenShift version for a new cluster ----------------------------------------------
+  - name: guide range picks the newest enabled stable 4.20.z
+    step: versions
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] }}" }
+    expect: { blocking: false, status: { version to create: ok }, detail: ["4.20.12, the newest ROSA HCP version in 4.19.9 <= v < 4.21"] }
+
+  - name: article range (override) picks 4.22.z and warns
+    step: versions
+    vars: { serveguard_openshift_range: article }
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] }}" }
+    expect: { blocking: false, status: { version to create: ok, source: warn }, detail: ["4.22.1"] }
+
+  - name: no version in range -> fail
+    step: versions
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] | selectattr('raw_id', 'match', '4\\.(18|21|22|23)') | list }}" }
+    expect: { blocking: true, status: { version to create: fail } }
+
+  - name: existing cluster -> version n/a
+    step: versions
+    raw: { cluster_exists: true, versions: null }
+    expect: { blocking: false, status: { version to create: n/a } }
+
   # ---- cluster -------------------------------------------------------------------------
-  - name: cluster absent -> create
+  - name: cluster absent -> create at the chosen version
     step: cluster
     raw: { exists: false, cluster: {} }
-    expect: { action: create, blocking: false, status: { exists: todo } }
+    expect: { action: create, blocking: false, status: { exists: todo }, detail: ["OpenShift 4.20.12"] }
 
   - name: cluster absent on the on-cluster playbook -> fail
     step: cluster
@@ -117,10 +166,21 @@ cases:
     raw: { exists: false, cluster: {} }
     expect: { action: none, blocking: true, status: { exists: fail } }
 
-  - name: cluster ready at pinned version -> skip
+  - name: cluster ready at 4.20.z -> skip
     step: cluster
     raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }
     expect: { action: satisfied, blocking: false, status: { ready: satisfied } }
+
+  - name: cluster at 4.21.3 (the Mistral pin) -> conflict under the guide range
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] | combine({'openshift_version': '4.21.3'}) }}" }
+    expect: { action: none, blocking: true, status: { version: conflict }, detail: ["serveguard_openshift_range=article"] }
+
+  - name: cluster at 4.21.3 under the article range -> skip
+    step: cluster
+    vars: { serveguard_openshift_range: article }
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] | combine({'openshift_version': '4.21.3'}) }}" }
+    expect: { action: satisfied, blocking: false }
 
   - name: cluster installing -> wait
     step: cluster
@@ -193,8 +253,9 @@ cases:
       instances: [{ type: t3.large, vcpus: 2 }]
     expect:
       blocking: false
-      status: { "m6i.2xlarge offered": ok, "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": ok, "m6i.2xlarge holds predictor+Job": ok }
-      detail: ["this run adds 24"]
+      status: { "m6i.2xlarge offered": ok, "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": ok, "m6i.2xlarge holds predictor+Job": ok,
+                "publisher prove Job fits a node": ok, "verifier approve Job fits a node": ok }
+      detail: ["16.0Gi on m5.2xlarge, m6i.2xlarge", "this run adds 24"]
 
   - name: Standard quota too small for a new cluster
     step: quota
@@ -427,6 +488,22 @@ cases:
       status: { "schedulable nodes": ok, "receiver build": ok, "predictor (+guard init)": ok, "predictor + story Job": ok }
       detail: ["fits on ip-10-0-1-3"]
 
+  - name: publish (4 CPU / 16Gi + 16Gi proving-key volume) fits a worker
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: false, status: { "publisher prove Job": ok, "verifier approve Job": ok, "verifier admit Job": ok }, detail: ["4 CPU / 16.0Gi / 16.0Gi ephemeral fits"] }
+
+  - name: publish with more memory than any node has free -> fail
+    step: capacity
+    workload: { publish_memory: 40Gi }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: true, status: { "publisher prove Job": fail, "verifier approve Job": ok } }
+
+  - name: pods of all three trust domains are not counted as used
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-trust-domains'] }}" }
+    expect: { blocking: false, status: { "predictor + story Job": ok, "publisher prove Job": ok } }
+
   - name: busy cluster -> predictor does not fit
     step: capacity
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-busy'] }}" }
@@ -444,7 +521,7 @@ cases:
     step: capacity
     facts: { _sg_pool: { action: create } }
     raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
-    expect: { blocking: false, status: { "predictor (+guard init)": n/a, "receiver Job": ok } }
+    expect: { blocking: false, status: { "predictor (+guard init)": n/a, "tools Job": ok } }
 
   - name: 4 vCPU workers cannot hold a 4 CPU predictor
     step: capacity

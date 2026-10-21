@@ -1,4 +1,4 @@
 ---
-- name: "stub trust_anchor: record the call"
+- name: "stub trust_anchor main: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['trust_anchor'] }}"

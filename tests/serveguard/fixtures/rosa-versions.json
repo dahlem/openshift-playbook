@@ -1,0 +1,74 @@
+[
+ {
+  "kind": "Version",
+  "id": "openshift-v4.18.25",
+  "raw_id": "4.18.25",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.19.20",
+  "raw_id": "4.19.20",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.20.10",
+  "raw_id": "4.20.10",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.20.12",
+  "raw_id": "4.20.12",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.20.13",
+  "raw_id": "4.20.13",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "candidate"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.20.14",
+  "raw_id": "4.20.14",
+  "enabled": false,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.21.3",
+  "raw_id": "4.21.3",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.22.1",
+  "raw_id": "4.22.1",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ },
+ {
+  "kind": "Version",
+  "id": "openshift-v4.23.0",
+  "raw_id": "4.23.0",
+  "enabled": true,
+  "hosted_control_plane_enabled": true,
+  "channel_group": "stable"
+ }
+]

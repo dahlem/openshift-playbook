@@ -1,0 +1,118 @@
+---
+# Offline, against the REAL serveguard.openshift_ai collection (../serveguard,
+# linked into a temporary collections path by run.sh):
+#   - pre_workload finds it with ansible-galaxy and reads roles/common/defaults;
+#     every mapped workload variable equals the collection's own default;
+#   - every role entry point the playbooks include exists in the real collection,
+#     the workload include runs them in the collection's own playbooks/demo.yml
+#     order, and the stub used by test_workload.yml has the same entry points;
+#   - with the real requests, the default pools hold every workload.
+- name: Interface with the real serveguard.openshift_ai (offline)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    serveguard_accelerator: cpu
+    _quota_fails: "{{ _sg_checks | default([]) | selectattr('step', 'equalto', 'quota') | selectattr('status', 'equalto', 'fail') | list }}"
+    real: "{{ lookup('env', 'SERVEGUARD_COLLECTION_DIR') }}"
+    stub: "{{ playbook_dir }}/fixtures/collections/ansible_collections/serveguard/openshift_ai"
+    repo: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Load version constraints
+      ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
+
+    - name: Read the workload requests from the collection
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+      vars:
+        serveguard_checks_mode: enforce
+
+    - name: Read the real common defaults directly
+      ansible.builtin.include_vars:
+        file: "{{ real }}/roles/common/defaults/main.yml"
+        name: _real_defaults
+
+    - name: pre_workload maps every variable to the collection's own default
+      ansible.builtin.assert:
+        that:
+          - _sg_raw_workload.collection.version == (lookup('file', real ~ '/galaxy.yml') | from_yaml).version
+          - _unmapped | length == 0
+          - _sg_workload.predictor_cpu == (expect_override | default('4') | string)
+          - _sg_workload.predictor_memory == '8Gi'
+          - _sg_workload.namespace == 'serveguard-demo'
+          - _sg_workload.publisher_namespace == 'sg-publisher'
+          - _sg_workload.verifier_namespace == 'sg-verifier'
+        fail_msg: "unmapped (not in the collection): {{ _unmapped }}"
+      vars:
+        _unmapped: "{{ serveguard_workload_vars.values() | reject('in', _real_defaults) | list }}"
+
+    - name: Every mapped value equals the real default (or the -e override, which wins)
+      ansible.builtin.assert:
+        that: >-
+          _sg_workload[item.key] | string ==
+          ((expect_override | string) if (item.value == 'serveguard_predictor_cpu' and expect_override is defined)
+           else (_real_defaults[item.value] | string))
+        fail_msg: "{{ item.key }}: {{ _sg_workload[item.key] }} != {{ _real_defaults[item.value] }}"
+        quiet: true
+      loop: "{{ serveguard_workload_vars | dict2items }}"
+      loop_control:
+        label: "{{ item.value }}"
+
+    - name: Entry points the playbooks include
+      ansible.builtin.set_fact:
+        _includes: >-
+          {{ (lookup('file', repo ~ '/playbooks/includes/serveguard-demo-workload.yml') | from_yaml
+              | sg_test_role_includes)
+             + (lookup('file', repo ~ '/playbooks/serveguard-demo-teardown.yml') | from_yaml
+                | map(attribute='tasks') | flatten | sg_test_role_includes) }}
+        _demo_order: >-
+          {{ lookup('file', real ~ '/playbooks/demo.yml') | from_yaml
+             | map(attribute='tasks') | flatten | sg_test_role_includes }}
+
+    - name: Each entry point exists in the real collection and in the stub
+      ansible.builtin.assert:
+        that:
+          - (real ~ '/roles/' ~ item ~ '.yml') is file
+          - (stub ~ '/roles/' ~ item ~ '.yml') is file
+        fail_msg: "{{ item }}.yml missing ({{ real }} or the stub)"
+        quiet: true
+      loop: "{{ _includes | unique }}"
+
+    # Ours = demo.yml's order, plus one re-observation (serve) after the stories.
+    - name: The workload runs the collection's demo order
+      ansible.builtin.assert:
+        that: _includes | reject('search', '^teardown/') | list == _demo_order + ['serving_consumer/tasks/serve']
+        fail_msg: "ours {{ _includes }} vs demo.yml {{ _demo_order }}"
+
+    - name: Pool sizing with the real requests (plan check)
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: _evaluate_quota.yml }
+      vars:
+        serveguard_checks_mode: report
+        serveguard_pool_instance_type: "{{ item }}"
+        _sg_cluster: { action: satisfied }
+        _sg_pool: { action: satisfied }
+        _sg_raw_quota:
+          az: us-east-1a
+          offered: [m5.2xlarge, m6i.2xlarge, g6.2xlarge]
+          rosa_types: [m5.2xlarge, m6i.2xlarge, g6.2xlarge]
+          specs:
+            m5.2xlarge: { vcpus: 8, memory_mib: 32768 }
+            m6i.2xlarge: { vcpus: 8, memory_mib: 32768 }
+            g6.2xlarge: { vcpus: 8, memory_mib: 32768, gpus: 1 }
+          quotas: {}
+          instances: []
+      loop: "{{ [versions.serveguard.cpu_instance_type, versions.serveguard.gpu_instance_type] }}"
+
+    - name: The default pools hold every workload with the real requests
+      ansible.builtin.assert:
+        that: _quota_fails | length == 0
+        fail_msg: "{{ _sg_checks | selectattr('step', 'equalto', 'quota') | map('serveguard_row') | list }}"
+      when: expect_override is not defined
+
+    # -e serveguard_predictor_cpu=6: predictor 6 + a co-located 1-CPU Job = 7 CPU, more
+    # than an 8-vCPU node leaves; the override reaches the sizing check, which says so.
+    - name: An oversized override is caught by the pool-sizing check
+      ansible.builtin.assert:
+        that:
+          - _quota_fails | length > 0
+          - _quota_fails | map(attribute='detail') | select('search', '7 CPU') | list | length > 0
+        fail_msg: "{{ _sg_checks | selectattr('step', 'equalto', 'quota') | map('serveguard_row') | list }}"
+      when: expect_override is defined

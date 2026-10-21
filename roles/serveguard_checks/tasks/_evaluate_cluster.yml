@@ -4,9 +4,11 @@
     _sg_result: >-
       {{ _sg_raw_cluster | sg_eval_cluster({
            'name': rosa_cluster_name,
-           'pinned': versions.cluster.openshift_version,
-           'min': versions.serveguard.requirements.openshift.min,
-           'max_exclusive': versions.serveguard.requirements.openshift.max_exclusive,
+           'pinned': _sg_versions.version | default(none),
+           'version_pending': _sg_versions is not defined,
+           'range': serveguard_openshift_range,
+           'min': versions.serveguard.requirements.openshift[serveguard_openshift_range].min,
+           'max_exclusive': versions.serveguard.requirements.openshift[serveguard_openshift_range].max_exclusive,
            'region': aws_region | default(''),
            'must_exist': serveguard_cluster_must_exist | bool,
            'allow_version': serveguard_allow_cluster_version | bool }) }}

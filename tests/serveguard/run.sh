@@ -22,7 +22,18 @@ run test_checks.yml
 run test_preflight.yml
 run test_identity.yml
 run test_workload.yml
-run test_workload.yml -e serveguard_predictor_cpu=6 -e expect_cpu=6
+# The real collection, from the sibling checkout, linked like an installed one.
+real="$repo/../serveguard/integrations/openshift-ai/ansible"
+if [ -f "$real/galaxy.yml" ]; then
+  coll="$(mktemp -d)"; trap 'rm -rf "$coll"' EXIT
+  mkdir -p "$coll/ansible_collections/serveguard"
+  ln -s "$(cd "$real" && pwd)" "$coll/ansible_collections/serveguard/openshift_ai"
+  export SERVEGUARD_COLLECTION_DIR="$(cd "$real" && pwd)"
+  ANSIBLE_COLLECTIONS_PATH="$coll" run test_interface.yml
+  ANSIBLE_COLLECTIONS_PATH="$coll" run test_interface.yml -e serveguard_predictor_cpu=6 -e expect_override=6
+else
+  echo "SKIP test_interface.yml (no ../serveguard checkout with the collection)"
+fi
 echo "== syntax-check"
 # With the repository's own ansible.cfg and inventory, as a user runs them.
 for p in playbooks/*.yml; do

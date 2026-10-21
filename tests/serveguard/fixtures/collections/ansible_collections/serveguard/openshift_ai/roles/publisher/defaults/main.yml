@@ -1,5 +1,0 @@
----
-serveguard_job_cpu: 500m
-serveguard_job_memory: 1Gi
-serveguard_storage_class: ""
-serveguard_store_access_mode: ReadWriteOnce

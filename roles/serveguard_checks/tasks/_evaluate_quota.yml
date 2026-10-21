@@ -19,6 +19,9 @@
            'quota_codes': versions.serveguard.requirements.quota_codes,
            'serving_type': serveguard_pool_instance_type,
            'serving_demand': _sg_serving_demand,
+           'worker_type': versions.infrastructure.compute_instance_type,
+           'job_demands': _sg_workload | sg_workload_demands(serveguard_accelerator, '0')
+                          | rejectattr('name', 'match', 'predictor') | list,
            'node_overhead': serveguard_node_overhead,
            'accelerator': serveguard_accelerator }) }}
   vars:

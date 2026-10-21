@@ -1,0 +1,9 @@
+---
+- name: Evaluate the approved SRS
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_srs | sg_eval_srs({'sha256': serveguard_srs_sha256 | default(''),
+                                    'logrows': _sg_workload.logrows | default(19)}) }}
+
+- name: Record SRS checks
+  ansible.builtin.include_tasks: _record.yml

@@ -18,8 +18,36 @@
     operators_enabled: [cert_manager, rhoai]
     rhoai_channel: stable-3.5
     ai_platform_mode: standard
+    serveguard_openshift_range: guide
+    # Effective workload requests as pre_workload would produce them. These are test
+    # inputs; test_interface.yml checks that pre_workload reads the real collection.
+    _test_workload:
+      predictor_cpu: "4"
+      predictor_memory: 8Gi
+      guard_cpu: 500m
+      guard_memory: 1Gi
+      job_cpu: 500m
+      job_memory: 1Gi
+      build_cpu: "2"
+      build_memory: 4Gi
+      approve_cpu: "4"
+      approve_memory: 16Gi
+      publish_cpu: "4"
+      publish_memory: 16Gi
+      admit_cpu: "2"
+      admit_memory: 4Gi
+      work_size: 16Gi
+      namespace: serveguard-demo
+      publisher_namespace: sg-publisher
+      verifier_namespace: sg-verifier
+      receiver_image: ""
+      storage_class: ""
+      store_access_mode: ReadWriteOnce
+      logrows: 19
     # Variables a case may override; reset to these before each case.
     _test_defaults:
+      serveguard_openshift_range: guide
+      serveguard_srs_sha256: ""
       serveguard_allow_cluster_version: false
       serveguard_allow_pool_mismatch: false
       serveguard_allow_channel_change: false
@@ -40,14 +68,6 @@
       loop: "{{ query('fileglob', playbook_dir ~ '/fixtures/*.json') }}"
       loop_control:
         label: "{{ item | basename }}"
-
-    # The workload requests come from the (stub) collection, as in a real run.
-    - name: Read the workload requests from the stub collection
-      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
-
-    - name: Keep them as the per-case baseline
-      ansible.builtin.set_fact:
-        _test_workload: "{{ _sg_workload }}"
 
     - name: Load cases
       ansible.builtin.include_vars:

@@ -6,9 +6,15 @@
   ansible.builtin.include_tasks: pre_local.yml
 - name: Workload requests (serveguard.openshift_ai defaults)
   ansible.builtin.include_tasks: pre_workload.yml
+- name: Approved SRS (local)
+  ansible.builtin.include_tasks: pre_srs.yml
 - name: AWS account
   ansible.builtin.include_tasks: pre_aws.yml
 - name: Cluster
+  ansible.builtin.include_tasks: pre_cluster.yml
+- name: OpenShift version for a new cluster
+  ansible.builtin.include_tasks: pre_versions.yml
+- name: Cluster (with the chosen version)
   ansible.builtin.include_tasks: pre_cluster.yml
 - name: Serving pool
   ansible.builtin.include_tasks: pre_pool.yml

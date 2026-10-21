@@ -1,4 +1,4 @@
 ---
-- name: "stub publisher: record the call"
+- name: "stub publisher main: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['publisher'] }}"

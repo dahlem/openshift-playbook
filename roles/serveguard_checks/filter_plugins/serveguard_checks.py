@@ -335,6 +335,18 @@ def sg_eval_quota(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
         rows.append(_row(step, f"{pool} holds predictor+Job", "ok" if ok else "fail",
                          f"~{_cores(cpu)} CPU / {_gib(mem)} usable vs {_cores(want_cpu)} CPU / {_gib(want_mem)} needed"
                          + ("" if ok else "; choose a larger serving_pool_instance_type")))
+        # Jobs without affinity land on a worker or the serving node: the largest must fit one.
+        for d in req.get("job_demands") or []:
+            fits_on = []
+            for t in {req.get("worker_type"), pool} - {None}:
+                ts = specs.get(t)
+                if ts and int(ts["vcpus"]) * 1000 - k8s_cpu(overhead.get("cpu")) >= k8s_cpu(d["cpu"]) \
+                        and int(ts["memory_mib"]) * 2**20 - k8s_bytes(overhead.get("memory")) >= k8s_bytes(d["memory"]):
+                    fits_on.append(t)
+            rows.append(_row(step, f"{d['name']} fits a node", "ok" if fits_on else "fail",
+                             f"{_cores(k8s_cpu(d['cpu']))} CPU / {_gib(k8s_bytes(d['memory']))} on "
+                             + (", ".join(sorted(fits_on)) if fits_on else
+                                f"neither {req.get('worker_type')} nor {pool} (minus overhead); choose larger types")))
         if req.get("accelerator") == "nvidia" and int(s.get("gpus") or 0) < 1:
             rows.append(_row(step, f"{pool} has a GPU", "fail", "accelerator nvidia needs a GPU instance type"))
     return {"rows": rows, "action": "none"}
@@ -355,9 +367,14 @@ def sg_eval_cluster(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
         if req.get("must_exist"):
             return {"rows": [_row(step, "exists", "fail", f"cluster {req['name']} not found; use playbooks/serveguard-demo.yml to create it")],
                     "action": "none"}
-        if not version_in_range(req["pinned"], lo, hi):
-            rows.append(_row(step, "pinned version", "fail",
-                             f"versions.yml pins {req['pinned']}, outside {lo} <= v < {hi} for RHOAI"))
+        if not req.get("pinned") and req.get("version_pending"):
+            rows.append(_row(step, "exists", "todo", f"will create {req['name']} (HCP; version chosen next)"))
+        elif not req.get("pinned"):
+            rows.append(_row(step, "version to create", "fail",
+                             f"no ROSA HCP version in {lo} <= v < {hi} (see the openshift versions row)"))
+        elif not version_in_range(req["pinned"], lo, hi):
+            rows.append(_row(step, "version to create", "fail",
+                             f"{req['pinned']} is outside {lo} <= v < {hi} for RHOAI"))
         else:
             rows.append(_row(step, "exists", "todo", f"will create {req['name']} (OpenShift {req['pinned']}, HCP)"))
         return {"rows": rows, "action": "create"}
@@ -385,11 +402,73 @@ def sg_eval_cluster(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
             rows.append(_row(step, "version", "override", f"{version} outside {lo} <= v < {hi}; serveguard_allow_cluster_version=true"))
         else:
             rows.append(_row(step, "version", "conflict",
-                             f"{version} outside {lo} <= v < {hi} for RHOAI; upgrade (playbooks/rosa-upgrade.yml) or set serveguard_allow_cluster_version=true"))
+                             f"{version} outside {lo} <= v < {hi} for RHOAI ({req.get('range', 'guide')} range); "
+                             "use serveguard_openshift_range=article for 4.21/4.22, upgrade, or set serveguard_allow_cluster_version=true"))
     if not _blocking(rows) and action == "satisfied":
         rows.append(_row(step, "ready", "satisfied", f"{req['name']} ready, OpenShift {version}"))
     return {"rows": rows, "action": "none" if _blocking(rows) else action,
             "api_url": (c.get("api") or {}).get("url"), "version": version}
+
+
+# ---- OpenShift version for a new cluster -------------------------------------------------
+
+
+def sg_eval_versions(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: versions (`rosa list versions --hosted-cp -o json`)|None, cluster_exists.
+    req: range (guide|article), min, max_exclusive, channel_group.
+    Picks the newest enabled HCP version of the channel group inside the range."""
+    step = "openshift"
+    if raw.get("cluster_exists"):
+        return {"rows": [_row(step, "version to create", "n/a", "the cluster exists; its version is checked below")],
+                "action": "none", "version": None}
+    versions = raw.get("versions")
+    if versions is None:
+        return {"rows": [_row(step, "version to create", "fail", "rosa list versions --hosted-cp failed (rosa login?)")],
+                "action": "none", "version": None}
+    lo, hi = req["min"], req["max_exclusive"]
+    found = []
+    for v in versions:
+        raw_id = v.get("raw_id") or v.get("id", "").replace("openshift-v", "")
+        if not raw_id or v.get("enabled") is False or v.get("hosted_control_plane_enabled") is False:
+            continue
+        if req.get("channel_group") and v.get("channel_group", req["channel_group"]) != req["channel_group"]:
+            continue
+        if re.fullmatch(r"\d+\.\d+\.\d+", raw_id) and version_in_range(raw_id, lo, hi):
+            found.append(raw_id)
+    if not found:
+        return {"rows": [_row(step, "version to create", "fail",
+                              f"ROSA HCP offers no version in {lo} <= v < {hi} ({req['range']} range)")],
+                "action": "none", "version": None}
+    best = max(found, key=_vtuple)
+    rows = [_row(step, "version to create", "ok", f"{best}, the newest ROSA HCP version in {lo} <= v < {hi} ({req['range']} range)")]
+    if req["range"] == "article":
+        rows.append(_row(step, "source", "warn",
+                         "4.21/4.22 are supported by the Supported Configurations article only, not the 3.5 installation guide"))
+    return {"rows": rows, "action": "none", "version": best}
+
+
+# ---- approved SRS (local file, never downloaded) ---------------------------------------
+
+
+def sg_eval_srs(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: path, exists, sha256 (of the local file, if it exists). req: sha256, logrows."""
+    step = "srs"
+    hint = (f"supply it: -e serveguard_srs_path=~/.ezkl/srs/kzg{req.get('logrows', 19)}.srs "
+            "-e serveguard_srs_sha256=<approved SHA-256> (or in inventory/group_vars/all/site.yml); it is never downloaded")
+    rows = []
+    want = (req.get("sha256") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        rows.append(_row(step, "approved digest", "fail", "serveguard_srs_sha256 is not a SHA-256; " + hint))
+    if not raw.get("path"):
+        rows.append(_row(step, "approved SRS file", "fail", "serveguard_srs_path is not set; " + hint))
+    elif not raw.get("exists"):
+        rows.append(_row(step, "approved SRS file", "fail", f"{raw['path']} not found; " + hint))
+    elif want and raw.get("sha256", "").lower() != want:
+        rows.append(_row(step, "approved SRS file", "fail",
+                         f"{raw['path']} has SHA-256 {raw.get('sha256', '')[:16]}..., not the approved {want[:16]}..."))
+    else:
+        rows.append(_row(step, "approved SRS file", "ok", f"{raw['path']} matches the approved SHA-256"))
+    return {"rows": rows, "action": "none"}
 
 
 # ---- machine pool -------------------------------------------------------------------
@@ -783,11 +862,13 @@ def _pod_requests(pod: dict[str, Any]) -> dict[str, int]:
 
 
 def sg_workload_demands(w: dict[str, Any], accelerator: str, min_ephemeral: str) -> list[dict[str, Any]]:
-    """Effective workload requests (pre_workload) -> capacity demands.
+    """Effective workload requests (pre_workload) -> capacity demands, one per pod.
 
-    The predictor pod's request is max(predictor, guard init-container); story Jobs
-    co-locate with the predictor (ReadWriteOnce store), so that sum is a demand too.
-    A workload without both its _cpu and _memory is left out."""
+    The collection runs its Jobs one after another (approve, publish, admit) and none
+    of them has node affinity, so each must fit on some node. The predictor pod's
+    request is max(predictor, guard init-container); story Jobs co-locate with the
+    predictor (ReadWriteOnce store), so that sum must fit on one node. A workload
+    without both its _cpu and _memory is left out."""
     def pair(prefix: str) -> tuple[int, int] | None:
         cpu, mem = w.get(f"{prefix}_cpu"), w.get(f"{prefix}_memory")
         return (k8s_cpu(cpu), k8s_bytes(mem)) if cpu is not None and mem is not None else None
@@ -798,7 +879,16 @@ def sg_workload_demands(w: dict[str, Any], accelerator: str, min_ephemeral: str)
     if build and not w.get("receiver_image"):
         out.append({"name": "receiver build", "cpu": f"{build[0]}m", "memory": build[1]})
     if job:
-        out.append({"name": "receiver Job", "cpu": f"{job[0]}m", "memory": job[1]})
+        out.append({"name": "tools Job", "cpu": f"{job[0]}m", "memory": job[1]})
+    # Proving-key work volume (emptyDir on the node's disk) for publish and approve.
+    work = w.get("work_size")
+    for name, label in (("approve", "verifier approve Job"), ("publish", "publisher prove Job"), ("admit", "verifier admit Job")):
+        p = pair(name)
+        if p:
+            d = {"name": label, "cpu": f"{p[0]}m", "memory": p[1]}
+            if work and name in ("approve", "publish"):
+                d["min_ephemeral"] = work
+            out.append(d)
     if pred:
         cpu, mem = max(pred[0], guard[0] if guard else 0), max(pred[1], guard[1] if guard else 0)
         out.append({"name": "predictor (+guard init)", "cpu": f"{cpu}m", "memory": mem, "gpu": gpu,
@@ -852,7 +942,7 @@ def sg_eval_capacity(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
     step = "capacity"
     if not raw.get("cluster_reachable"):
         return {"rows": [_row(step, "allocatable", "n/a", "cluster not reachable yet (see the quota plan check)")], "action": "none"}
-    free = sg_node_free(raw.get("nodes") or [], raw.get("pods") or [], [req.get("namespace")])
+    free = sg_node_free(raw.get("nodes") or [], raw.get("pods") or [], req.get("namespaces") or [req.get("namespace")])
     usable = [n for n in free if n["schedulable"]]
     rows = [_row(step, "schedulable nodes", "ok" if usable else "fail",
                  f"{len(usable)} of {len(free)} (untainted, Ready)" if usable else "no Ready, untainted, schedulable node")]
@@ -965,12 +1055,14 @@ def sg_defined_vars(names: list[str], variables: dict[str, Any]) -> dict[str, An
 
 
 def sg_story_failures(results: list[dict[str, Any]]) -> list[str]:
-    return [r["story"] for r in results or [] if r.get("verdict") != r.get("expected")]
+    return [r["story"] for r in results or []
+            if not (r["as_expected"] if "as_expected" in r else r.get("verdict") == r.get("expected"))]
 
 
 def sg_story_lines(result: dict[str, Any]) -> list[str]:
     """One story -> banner lines: verdict, story, then the reason indented."""
-    mark = "" if result.get("verdict") == result.get("expected") else f"  (expected {result.get('expected')})"
+    ok = result["as_expected"] if "as_expected" in result else result.get("verdict") == result.get("expected")
+    mark = "" if ok else f"  (expected {result.get('expected')})"
     lines = [f"  {str(result.get('verdict')):<12} {result.get('story')}{mark}"]
     if result.get("reason"):
         lines.append(f"  {'':<12} {str(result['reason'])[:110]}")
@@ -1007,6 +1099,8 @@ class FilterModule:
             "sg_eval_aws": sg_eval_aws,
             "sg_eval_quota": sg_eval_quota,
             "sg_eval_cluster": sg_eval_cluster,
+            "sg_eval_versions": sg_eval_versions,
+            "sg_eval_srs": sg_eval_srs,
             "sg_eval_pool": sg_eval_pool,
             "sg_eval_operators": sg_eval_operators,
             "sg_operator_raw": sg_operator_raw,

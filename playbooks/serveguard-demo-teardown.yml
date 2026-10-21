@@ -16,9 +16,42 @@
   roles:
     - role: login
   tasks:
-    - name: Remove the ServeGuard workload
+    - name: Remove the ServeGuard workload (the three trust domains and the admission policy)
       ansible.builtin.include_role:
         name: serveguard.openshift_ai.teardown
+
+    - name: Read the workload namespaces from the collection
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+      vars:
+        serveguard_checks_mode: report
+
+    - name: Verify the trust-domain namespaces are gone
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+      register: _sg_td_ns
+      loop:
+        - "{{ _sg_workload.namespace | default('serveguard-demo') }}"
+        - "{{ _sg_workload.publisher_namespace | default('sg-publisher') }}"
+        - "{{ _sg_workload.verifier_namespace | default('sg-verifier') }}"
+
+    - name: Verify the admission policy and binding are gone
+      kubernetes.core.k8s_info:
+        api_version: admissionregistration.k8s.io/v1
+        kind: "{{ item }}"
+        name: "serveguard-admitted-adapters-{{ _sg_workload.namespace | default('serveguard-demo') }}"
+      register: _sg_td_vap
+      loop: [ValidatingAdmissionPolicy, ValidatingAdmissionPolicyBinding]
+
+    - name: Assert the workload is removed before the platform goes
+      ansible.builtin.assert:
+        that:
+          - _sg_td_ns.results | map(attribute='resources') | flatten | length == 0
+          - _sg_td_vap.results | map(attribute='resources') | flatten | length == 0
+        fail_msg: >-
+          Still present: {{ (_sg_td_ns.results + _sg_td_vap.results) | selectattr('resources')
+          | map(attribute='item') | join(', ') }}. Re-run the teardown; the platform was not touched.
 
     - name: Remove the platform and the serving pool
       when: teardown_platform | default(true) | bool

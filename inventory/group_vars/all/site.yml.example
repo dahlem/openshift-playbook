@@ -21,3 +21,8 @@ rosa_worker_role: arn:aws:iam::<account-id>:role/<worker-role>
 rosa_private_subnet: subnet-<private>
 rosa_public_subnet: subnet-<public>
 aws_region: us-east-1
+
+# ServeGuard demo: the operator-approved KZG SRS (never downloaded by the playbooks).
+# The collection copies it into each trust domain's store and checks its digest.
+# serveguard_srs_path: ~/.ezkl/srs/kzg19.srs        # logrows 19
+# serveguard_srs_sha256: <approved SHA-256, 64 hex>

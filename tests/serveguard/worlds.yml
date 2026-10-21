@@ -25,6 +25,8 @@ _quota_ok:
   quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
   instances: []
 _unreachable_op: { cluster_reachable: false }
+_srs_ok: { path: /home/demo/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+_versions_list: "{{ fx['rosa-versions'] }}"
 _workload_stub:
   collection: { name: serveguard.openshift_ai, version: 0.0.0-stub, path: /stub/serveguard/openshift_ai }
   defaults:
@@ -36,6 +38,16 @@ _workload_stub:
     serveguard_receiver_build_memory: 4Gi
     serveguard_job_cpu: 500m
     serveguard_job_memory: 1Gi
+    serveguard_approve_cpu: "4"
+    serveguard_approve_memory: 16Gi
+    serveguard_publish_cpu: "4"
+    serveguard_publish_memory: 16Gi
+    serveguard_admit_cpu: "2"
+    serveguard_admit_memory: 4Gi
+    serveguard_work_size: 16Gi
+    serveguard_publisher_namespace: sg-publisher
+    serveguard_verifier_namespace: sg-verifier
+    serveguard_logrows: 19
     serveguard_namespace: serveguard-demo
     serveguard_image: ""
     serveguard_storage_class: ""
@@ -49,8 +61,10 @@ _ready_pod:
 worlds:
   empty_account:
     local: "{{ _local_ok }}"
+    srs: "{{ _srs_ok }}"
     aws: "{{ _aws_ok }}"
     cluster: { exists: false, cluster: {} }
+    versions: { cluster_exists: false, versions: "{{ _versions_list }}" }
     cluster_reachable: false
     pool: { cluster_exists: false, exists: false, pool: {}, nodes: [] }
     quota: "{{ _quota_ok }}"
@@ -63,8 +77,10 @@ worlds:
 
   all_satisfied:
     local: "{{ _local_ok }}"
+    srs: "{{ _srs_ok }}"
     aws: "{{ _aws_ok }}"
     cluster: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }
+    versions: { cluster_exists: true, versions: "{{ _versions_list }}" }
     cluster_reachable: true
     pool: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-cpu'] }}", nodes: "{{ fx['nodes-cpu'][2:] }}" }
     quota: "{{ _quota_ok }}"
@@ -82,8 +98,10 @@ worlds:
 
   mistral_cluster:   # an existing Knative/Mistral install on an old cluster
     local: "{{ _local_ok }}"
+    srs: "{{ _srs_ok }}"
     aws: "{{ _aws_ok }}"
     cluster: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
+    versions: { cluster_exists: true, versions: "{{ _versions_list }}" }
     cluster_reachable: true
     pool: { cluster_exists: true, exists: false, pool: {}, nodes: [] }
     quota: "{{ _quota_ok }}"

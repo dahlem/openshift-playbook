@@ -1,0 +1,18 @@
+---
+- name: "stub serving_consumer serve: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['serving_consumer:serve'] }}"
+
+- name: "stub serving_consumer serve: publish the serving result (the digest may change on re-observation)"
+  ansible.builtin.set_fact:
+    serveguard_serving_result:
+      inference_service: serveguard-demo/serveguard-demo
+      ready: "{{ stub_serving_ready | default(true) }}"
+      guard_exit_code: "{{ stub_guard_exit | default(0) }}"
+      annotations:
+        serveguard.io/admitted: "true"
+        serveguard.io/adapter-digest: >-
+          {{ (stub_digest_after_stories | default('28266fff00'))
+             if ('stories' in (stub_calls | default([]))) else '28266fff00' }}
+        serveguard.io/package-root: 17a154dc00
+        serveguard.io/base-hash: ecf2f3e100

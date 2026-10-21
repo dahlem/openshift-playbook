@@ -18,7 +18,7 @@
       --support-role-arn={{ rosa_support_role }}
       --worker-iam-role={{ rosa_worker_role }}
       --compute-machine-type={{ versions.infrastructure.compute_instance_type }}
-      --version={{ versions.cluster.openshift_version }}
+      --version={{ rosa_openshift_version | default(versions.cluster.openshift_version) }}
   when: _cluster_info.rc != 0
 
 - name: Wait for cluster to be ready

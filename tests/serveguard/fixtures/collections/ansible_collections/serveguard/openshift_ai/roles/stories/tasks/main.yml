@@ -1,15 +1,25 @@
 ---
-- name: "stub stories: record the call"
+- name: "stub stories main: record the call"
   ansible.builtin.set_fact:
     stub_calls: "{{ (stub_calls | default([])) + ['stories'] }}"
 
-- name: "stub stories: publish the structured result and the service after the stories"
-  ansible.builtin.set_fact:
-    serveguard_stories_result: "{{ stub_stories }}"
-    serveguard_serving_result: >-
-      {{ serveguard_serving_result | combine({'annotations': {'serveguard.io/adapter-digest': stub_digest_after_stories}}, recursive=True) }}
+- name: "stub stories: result in block/always, fail on an unexpected verdict (like the real role)"
+  vars:
+    _stub_default_stories:
+      - { story: query, expected: served, verdict: served, reason: "completion: a platform", verifier: consumer, as_expected: true }
+      - { story: unadmitted-isvc, expected: refused, verdict: refused, reason: "denied: adapter must be admitted", verifier: policy, as_expected: true }
+      - { story: tamper-read-factor, expected: refused, verdict: refused, reason: "commitment opening fails", verifier: guard, as_expected: true }
+      - { story: restore, expected: served, verdict: served, reason: "", verifier: guard, as_expected: true }
+  block:
+    - name: "stub stories: run"
+      ansible.builtin.set_fact:
+        serveguard_stories_result: "{{ stub_stories | default(_stub_default_stories) }}"
+  always:
+    - name: "stub stories: verdicts"
+      ansible.builtin.debug:
+        msg: "{{ serveguard_stories_result | map(attribute='story') | list }}"
 
-- name: "stub stories: fail like the real role when asked"
-  ansible.builtin.fail:
-    msg: "stub stories role failed"
-  when: stub_stories_role_fails | default(false) | bool
+- name: "stub stories: every story ended as expected"
+  ansible.builtin.assert:
+    that: serveguard_stories_result | rejectattr('as_expected') | list | length == 0
+    fail_msg: "unexpected: {{ serveguard_stories_result | rejectattr('as_expected') | list | to_json }}"
