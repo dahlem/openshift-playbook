@@ -1,0 +1,18 @@
+---
+# The integration Makefile's parameters, as make command-line assignments.
+
+- name: Assemble Makefile parameters
+  ansible.builtin.set_fact:
+    _sg_make_vars: >-
+      {{ [
+           'NAMESPACE=' ~ serveguard_namespace,
+           'ISVC=' ~ serveguard_isvc,
+           'ACCELERATOR=' ~ serveguard_accelerator,
+           'VLLM_IMAGE=' ~ serveguard_vllm_image,
+           'MODEL=' ~ serveguard_model,
+           'MODEL_REVISION=' ~ serveguard_model_revision,
+           'RHOAI_CHANNEL=' ~ rhoai_channel,
+           'TIMEOUT=' ~ serveguard_make_timeout,
+         ]
+         + (['IMAGE=' ~ serveguard_image] if serveguard_image | length > 0 else [])
+         + (['STORAGE_CLASS=' ~ serveguard_storage_class] if serveguard_storage_class | length > 0 else []) }}

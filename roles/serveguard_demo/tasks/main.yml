@@ -1,0 +1,10 @@
+---
+- name: "serveguard_demo: check preconditions"
+  ansible.builtin.include_tasks: preconditions.yml
+
+- name: "serveguard_demo: deploy"
+  ansible.builtin.include_tasks: deploy.yml
+  when: _deploy_needed | default(true)
+
+- name: "serveguard_demo: check postconditions"
+  ansible.builtin.include_tasks: postconditions.yml

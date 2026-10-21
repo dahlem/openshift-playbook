@@ -1,0 +1,25 @@
+---
+# ServeGuard OpenShift AI demo — the integration's Makefile drives the demo; this
+# role owns nothing on the cluster except what `make demo-up` creates.
+# The platform (cert-manager, RHOAI, KServe-only DSC) comes from the operators and
+# ai_platform roles, so the integration's `make env-up` is never called.
+
+# Checkout of https://github.com/<org>/serveguard (default: a sibling of this repo)
+serveguard_repo_dir: "{{ playbook_dir }}/../../serveguard"
+serveguard_integration_dir: "{{ serveguard_repo_dir }}/integrations/openshift-ai"
+
+# Makefile parameters
+serveguard_namespace: serveguard-demo
+serveguard_isvc: serveguard-demo
+serveguard_accelerator: cpu                        # cpu | nvidia  (ACCELERATOR)
+serveguard_vllm_image: "{{ versions.serveguard.vllm_cpu_image }}"
+serveguard_model: "{{ versions.serveguard.model }}"
+serveguard_model_revision: "{{ versions.serveguard.model_revision }}"
+serveguard_image: ""             # receiver image; "" = in-cluster BuildConfig -> internal registry
+serveguard_storage_class: ""     # "" = cluster default StorageClass
+serveguard_make_timeout: 20m     # per wait inside the Makefile (TIMEOUT)
+
+# Behaviour
+serveguard_redeploy: false       # true: re-run demo-up although the admitted service is Ready
+serveguard_run_stories: true     # run `make demo-stories` after demo-up
+serveguard_log_dir: "{{ playbook_dir }}/../logs"

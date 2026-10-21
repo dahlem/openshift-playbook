@@ -1,0 +1,156 @@
+---
+# Pre: serveguard checkout + tools present, oc logged in, KServe standard ready,
+# internal registry and a default StorageClass available (or overridden).
+
+- name: Load version constraints
+  ansible.builtin.include_vars:
+    file: "{{ versions_file }}"
+    name: versions
+  when: versions is not defined
+
+- name: Check the serveguard integration Makefile
+  ansible.builtin.stat:
+    path: "{{ serveguard_integration_dir }}/Makefile"
+  register: _sg_makefile
+
+- name: Assert the serveguard checkout exists
+  ansible.builtin.assert:
+    that: _sg_makefile.stat.exists
+    fail_msg: >-
+      {{ serveguard_integration_dir }}/Makefile not found.
+      Clone serveguard next to this repository, or pass -e serveguard_repo_dir=/path/to/serveguard.
+
+- name: Check make and uv
+  ansible.builtin.command: "{{ item }} --version"
+  register: _sg_tools
+  changed_when: false
+  failed_when: false
+  loop: [make, uv]
+
+- name: Assert make and uv are installed
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: "{{ item.item }} not found on PATH. Install it (uv: https://docs.astral.sh/uv/)."
+  loop: "{{ _sg_tools.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Verify oc login
+  ansible.builtin.command: oc whoami
+  register: _oc_whoami
+  changed_when: false
+  failed_when: false
+
+- name: Assert oc is logged in
+  ansible.builtin.assert:
+    that: _oc_whoami.rc == 0
+    fail_msg: "Not logged in via oc. Run the login role (playbooks/login.yml) first."
+
+- name: Verify KServe CRDs
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: _sg_kserve_crds
+  loop:
+    - inferenceservices.serving.kserve.io
+    - servingruntimes.serving.kserve.io
+
+- name: Assert KServe is installed
+  ansible.builtin.assert:
+    that: item.resources | length > 0
+    fail_msg: >-
+      CRD {{ item.item }} not found. Run the ai_platform step with
+      -e @scenarios/serveguard/cpu.yml (ai_platform_mode=standard) first.
+  loop: "{{ _sg_kserve_crds.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Check the integrated image registry
+  kubernetes.core.k8s_info:
+    api_version: imageregistry.operator.openshift.io/v1
+    kind: Config
+    name: cluster
+  register: _sg_registry
+  when: serveguard_image | length == 0
+
+- name: Assert the integrated image registry is Managed
+  ansible.builtin.assert:
+    that:
+      - _sg_registry.resources | length > 0
+      - _sg_registry.resources[0].spec.managementState | default('') == 'Managed'
+    fail_msg: >-
+      The integrated image registry is not Managed, so the in-cluster receiver build
+      cannot push. Enable it, or pass -e serveguard_image=<registry>/serveguard-receiver:<tag>.
+  when: serveguard_image | length == 0
+
+- name: Check for a default StorageClass
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+  register: _sg_storage_classes
+  when: serveguard_storage_class | length == 0
+
+- name: Assert a default StorageClass exists
+  ansible.builtin.assert:
+    that: >-
+      _sg_storage_classes.resources
+      | selectattr('metadata.annotations', 'defined')
+      | selectattr('metadata.annotations', 'contains', 'storageclass.kubernetes.io/is-default-class')
+      | map(attribute='metadata.annotations')
+      | selectattr('storageclass.kubernetes.io/is-default-class', 'equalto', 'true')
+      | list | length > 0
+    fail_msg: "No default StorageClass. Pass -e serveguard_storage_class=<name>."
+  when: serveguard_storage_class | length == 0
+
+- name: Check for allocatable GPUs
+  kubernetes.core.k8s_info:
+    kind: Node
+  register: _sg_nodes
+  when: serveguard_accelerator == 'nvidia'
+
+- name: Assert a node offers nvidia.com/gpu
+  ansible.builtin.assert:
+    that: >-
+      _sg_nodes.resources
+      | map(attribute='status.allocatable')
+      | selectattr('nvidia.com/gpu', 'defined')
+      | rejectattr('nvidia.com/gpu', 'equalto', '0')
+      | list | length > 0
+    fail_msg: >-
+      No node offers nvidia.com/gpu. Run the GPU pool and gpu_stack steps
+      (scenarios/serveguard/gpu.yml) first.
+  when: serveguard_accelerator == 'nvidia'
+
+- name: Check the admitted InferenceService
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ serveguard_namespace }}"
+    name: "{{ serveguard_isvc }}"
+  register: _sg_pre_isvc
+
+- name: Determine if deploy is needed
+  ansible.builtin.set_fact:
+    _deploy_needed: >-
+      {{ serveguard_redeploy | bool or not (
+        _sg_pre_isvc.resources | length > 0 and
+        (_sg_pre_isvc.resources[0].metadata.annotations | default({})).get('serveguard.io/admitted') == 'true' and
+        (_sg_pre_isvc.resources[0].status.conditions | default([])
+         | selectattr('type', 'equalto', 'Ready')
+         | selectattr('status', 'equalto', 'True') | list | length > 0)
+      ) }}
+
+- name: "serveguard_demo: already complete, skipping deploy."
+  ansible.builtin.debug:
+    msg: >-
+      InferenceService {{ serveguard_namespace }}/{{ serveguard_isvc }} is admitted and Ready.
+      Pass -e serveguard_redeploy=true to publish and admit again.
+  when: not (_deploy_needed | bool)
+
+- name: "serveguard_demo preconditions: PASSED"
+  ansible.builtin.debug:
+    msg: >-
+      serveguard checkout {{ serveguard_integration_dir }}, KServe present,
+      accelerator={{ serveguard_accelerator }}.
+  when: _deploy_needed | bool

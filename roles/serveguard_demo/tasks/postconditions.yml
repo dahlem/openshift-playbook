@@ -1,0 +1,69 @@
+---
+# Post: the receiver-written InferenceService is Ready with its verdict, and the
+# admission policy is in place.
+
+- name: Get the admitted InferenceService
+  kubernetes.core.k8s_info:
+    api_version: serving.kserve.io/v1beta1
+    kind: InferenceService
+    namespace: "{{ serveguard_namespace }}"
+    name: "{{ serveguard_isvc }}"
+  register: _sg_isvc
+
+- name: Assert InferenceService is Ready and admitted
+  ansible.builtin.assert:
+    that:
+      - _sg_isvc.resources | length > 0
+      - (_sg_isvc.resources[0].metadata.annotations | default({})).get('serveguard.io/admitted') == 'true'
+      - >-
+        _sg_isvc.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Ready')
+        | selectattr('status', 'equalto', 'True') | list | length > 0
+    fail_msg: >-
+      InferenceService {{ serveguard_namespace }}/{{ serveguard_isvc }} is not Ready
+      with serveguard.io/admitted=true. Check: oc -n {{ serveguard_namespace }} get isvc,pods,jobs
+
+- name: Get the admission policy
+  kubernetes.core.k8s_info:
+    api_version: admissionregistration.k8s.io/v1
+    kind: ValidatingAdmissionPolicy
+    name: "serveguard-admitted-adapters-{{ serveguard_namespace }}"
+  register: _sg_vap
+
+- name: Assert the admission policy exists
+  ansible.builtin.assert:
+    that: _sg_vap.resources | length > 0
+    fail_msg: "ValidatingAdmissionPolicy serveguard-admitted-adapters-{{ serveguard_namespace }} not found."
+
+- name: Read the verdict annotations
+  ansible.builtin.set_fact:
+    _sg_verdict_lines: >-
+      {{ (_sg_isvc.resources[0].metadata.annotations | dict2items
+          | selectattr('key', 'match', 'serveguard.io/') | list)
+         | map(attribute='key')
+         | zip(_sg_isvc.resources[0].metadata.annotations | dict2items
+               | selectattr('key', 'match', 'serveguard.io/') | map(attribute='value'))
+         | map('join', ' = ') | map('regex_replace', '^', '    ') | list }}
+
+- name: "serveguard_demo postconditions: PASSED"
+  ansible.builtin.debug:
+    msg: "{{ _head + _sg_verdict_lines + _tail }}"
+  vars:
+    _head:
+      - ""
+      - "============================================================"
+      - "  ServeGuard adapter admitted and serving"
+      - "============================================================"
+      - ""
+      - "  InferenceService: {{ serveguard_namespace }}/{{ serveguard_isvc }} (KServe standard)"
+      - "  Model:            {{ serveguard_model }}@{{ serveguard_model_revision[:12] }}"
+      - "  Serving:          {{ serveguard_accelerator }} ({{ serveguard_vllm_image }})"
+      - "  RHOAI channel:    {{ rhoai_channel }}"
+      - "  Policy:           ValidatingAdmissionPolicy {{ _sg_vap.resources[0].metadata.name }}"
+      - "  Verdict:"
+    _tail:
+      - ""
+      - "  Query:  make -C {{ serveguard_integration_dir }} demo-query NAMESPACE={{ serveguard_namespace }}"
+      - ""
+      - "============================================================"
+      - ""

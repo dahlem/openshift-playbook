@@ -1,0 +1,55 @@
+---
+# Tear down the ServeGuard demo in reverse dependency order.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#   ... -e teardown_platform=false     # keep RHOAI/cert-manager and the serving pool; demo only
+#   ... -e teardown_cluster=true       # also delete the ROSA cluster
+
+- name: Tear down ServeGuard demo
+  hosts: localhost
+  pre_tasks:
+    - name: Require a serveguard scenario
+      ansible.builtin.assert:
+        that: serveguard_accelerator is defined and ai_platform_mode == 'standard'
+        fail_msg: "Pass the scenario you deployed: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
+  roles:
+    - role: login
+  tasks:
+    - name: Remove the ServeGuard demo
+      ansible.builtin.include_role:
+        name: serveguard_demo
+        tasks_from: teardown
+
+    - name: Remove the platform and the serving pool
+      when: teardown_platform | default(true) | bool
+      block:
+        - name: Remove AI platform
+          ansible.builtin.include_role:
+            name: ai_platform
+            tasks_from: teardown
+
+        - name: Remove GPU stack
+          ansible.builtin.include_role:
+            name: gpu_stack
+            tasks_from: teardown
+          when: serveguard_accelerator == 'nvidia'
+
+        - name: Remove operators
+          ansible.builtin.include_role:
+            name: operators
+            tasks_from: teardown
+
+        - name: Remove the serving pool
+          ansible.builtin.include_role:
+            name: gpu_machinepool
+            tasks_from: teardown
+          vars:
+            gpu_pool_name: "{{ serveguard_pool_name }}"
+            gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+
+    - name: Remove ROSA cluster
+      ansible.builtin.include_role:
+        name: rosa_cluster
+        tasks_from: teardown
+      when: teardown_cluster | default(false) | bool

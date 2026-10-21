@@ -1,0 +1,44 @@
+---
+# ServeGuard on OpenShift AI, end to end: ROSA HCP cluster, a serving pool,
+# cert-manager + RHOAI (KServe standard only), then the serveguard integration's
+# `make demo-up` and `make demo-stories`. The integration's `make env-up` is not
+# used: this playbook owns the platform.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
+#
+# Options:
+#   -e rhoai_channel=stable-3.6               # RHOAI 3.6 once GA
+#   -e serveguard_repo_dir=/path/to/serveguard  # default: ../serveguard (sibling checkout)
+#   -e serveguard_run_stories=false           # stop after the admitted service is Ready
+
+- name: ServeGuard demo (cluster + platform + demo)
+  hosts: localhost
+  pre_tasks:
+    - name: Require a serveguard scenario
+      ansible.builtin.assert:
+        that: serveguard_accelerator is defined and ai_platform_mode == 'standard'
+        fail_msg: "Pass a scenario: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
+  roles:
+    - role: login
+    - role: rosa_cluster
+    - role: cluster_access
+    - role: gpu_machinepool          # the serving pool (CPU or GPU), untainted
+      vars:
+        gpu_pool_name: "{{ serveguard_pool_name }}"
+        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+        gpu_pool_taint: ""
+    - role: operators
+    - role: gpu_stack
+      vars:
+        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+      when: serveguard_accelerator == 'nvidia'
+    - role: ai_platform
+    - role: serveguard_demo
+  tasks:
+    - name: Run the ServeGuard stories
+      ansible.builtin.include_role:
+        name: serveguard_demo
+        tasks_from: stories
+      when: serveguard_run_stories | default(true) | bool
