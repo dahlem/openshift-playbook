@@ -1,0 +1,13 @@
+---
+- name: "pre receiver: read state"
+  ansible.builtin.include_tasks: _gather_receiver.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre receiver: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_receiver: "{{ serveguard_checks_fixtures.receiver }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre receiver: decide"
+  ansible.builtin.include_tasks: _evaluate_receiver.yml

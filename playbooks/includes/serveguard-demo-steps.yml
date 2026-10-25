@@ -161,6 +161,9 @@
       ansible.builtin.include_role: { name: supply_chain, tasks_from: image_policy }
       when: _sg_image_policy.action in ['create', 'satisfied']
 
+- name: Check the receiver composition certificate and the pinned trust anchor
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_receiver }
+
 - name: Check the internal image registry (and Quay, if configured)
   ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_registry }
 

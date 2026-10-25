@@ -10,11 +10,21 @@
       - { story: unadmitted-isvc, expected: refused, verdict: refused, reason: "denied: adapter must be admitted", verifier: policy, as_expected: true }
       - { story: tamper-read-factor, expected: refused, verdict: refused, reason: "commitment opening fails", verifier: guard, as_expected: true }
       - { story: restore, expected: served, verdict: served, reason: "", verifier: guard, as_expected: true }
+    _stub_receiver_stories:
+      - { story: receiver-admitted, expected: admitted, verdict: admitted, reason: "", verifier: guard, as_expected: true }
+      - { story: receiver-tampered-witness, expected: refused, verdict: refused, reason: "witness does not open", verifier: guard, as_expected: true }
+      - { story: receiver-tau-looser, expected: refused, verdict: refused, reason: "tau looser than the anchor's", verifier: public, as_expected: true }
+      - { story: receiver-missing, expected: refused, verdict: refused, reason: "no receiver block", verifier: public, as_expected: true }
   block:
     - name: "stub stories: run"
       ansible.builtin.set_fact:
-        serveguard_stories_result: "{{ stub_stories | default(_stub_default_stories) }}"
+        serveguard_stories_result: >-
+          {{ stub_stories | default(_stub_default_stories
+             + (stub_receiver_stories | default(_stub_receiver_stories) if (stub_receiver_required | default(false) | bool) else [])) }}
   always:
+    - name: "stub stories: the receiver stories' results"
+      ansible.builtin.set_fact:
+        serveguard_receiver_stories_result: "{{ serveguard_stories_result | selectattr('story', 'match', 'receiver-') | list }}"
     - name: "stub stories: verdicts"
       ansible.builtin.debug:
         msg: "{{ serveguard_stories_result | map(attribute='story') | list }}"

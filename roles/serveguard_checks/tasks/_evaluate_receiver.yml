@@ -1,0 +1,15 @@
+---
+- name: Evaluate the receiver composition certificate
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_receiver | sg_eval_receiver({
+           'required': _sg_workload.receiver_required | default(false) | bool,
+           'enforcer': _sg_workload.enforcer | default('vap'),
+           'override_anchor': (_sg_workload.overrides | default({})).trust_anchor | default(false) | bool }) }}
+
+- name: Keep the receiver decision
+  ansible.builtin.set_fact:
+    _sg_receiver: "{{ _sg_result }}"
+
+- name: Record receiver checks
+  ansible.builtin.include_tasks: _record.yml

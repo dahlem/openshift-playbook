@@ -15,6 +15,8 @@
     _sg_versions: { version: "4.20.12" }
     _sg_cluster: { action: satisfied, version: unknown }
     _sg_kyverno: { action: install }
+    _sg_raw_workload: { defaults: {} }
+    _sg_receiver: { detector_digest: null }
     _sg_workload: "{{ _test_workload | combine(case.workload | default({})) }}"
 
 - name: Apply case variables and facts

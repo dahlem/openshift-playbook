@@ -110,25 +110,46 @@ cases:
   # ---- approved SRS (local file) -------------------------------------------------------
   - name: approved SRS present with the configured digest
     step: srs
-    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
     raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
     expect: { blocking: false, status: { approved SRS file: ok } }
 
+  - name: the collection's kzg19 default digest is accepted, the file still hashed
+    step: srs
+    workload: { srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    expect: { blocking: false, status: { approved digest: ok, approved SRS file: ok }, detail: ["collection default for kzg19, EZKL v23.0.5 list"] }
+
+  - name: the default digest, but the local file differs -> fail
+    step: srs
+    workload: { srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: true, status: { approved digest: ok, approved SRS file: fail } }
+
+  - name: an overriding digest is reported as an override
+    step: srs
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: /srs/other.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: false, detail: ["override of the collection default"] }
+
   - name: SRS with another digest -> fail
     step: srs
-    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
     raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'cd' * 32 }}" }
     expect: { blocking: true, status: { approved SRS file: fail }, detail: ["not the approved"] }
 
   - name: SRS not supplied -> fail with how to supply it (never downloaded)
     step: srs
-    vars: { serveguard_srs_sha256: "" }
+    workload: { srs_sha256: "" }
     raw: { path: "", exists: false, sha256: "" }
     expect: { blocking: true, status: { approved digest: fail, approved SRS file: fail }, detail: ["kzg19.srs", "never downloaded"] }
 
   - name: SRS path missing on disk -> fail
     step: srs
-    vars: { serveguard_srs_sha256: "{{ 'ab' * 32 }}" }
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
     raw: { path: /nope/kzg19.srs, exists: false, sha256: "" }
     expect: { blocking: true, status: { approved SRS file: fail }, detail: ["/nope/kzg19.srs not found"] }
 
@@ -153,6 +174,105 @@ cases:
     step: versions
     raw: { cluster_exists: true, versions: null }
     expect: { blocking: false, status: { version to create: n/a } }
+
+  # ---- receiver composition certificate -----------------------------------------------------
+  - name: no receiver required -> n/a; no anchor yet
+    step: receiver
+    raw: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: true, anchor: null }
+    expect: { blocking: false, status: { receiver: n/a, trust anchor: todo } }
+
+  - name: receiver required with the SmolLM2 descriptor
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: evidence/receiver-smollm2.json, exists: true, parse_error: "", cluster_reachable: true, anchor: null,
+           descriptor: "{{ fx['receiver-smollm2'] }}" }
+    expect: { blocking: false, status: { descriptor: ok, stories: ok, trust anchor: todo }, detail: ["+4: receiver-admitted"] }
+
+  - name: receiver required, no descriptor given -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: false, anchor: null }
+    expect: { blocking: true, status: { descriptor: fail }, detail: ["evidence/receiver-smollm2.json"] }
+
+  - name: receiver descriptor of another schema -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: false, anchor: null, descriptor: { schema: other, detector_digest: 4444444444444444444444444444444444444444444444444444444444444444 } }
+    expect: { blocking: true, status: { descriptor: fail } }
+
+  - name: receiver descriptor not JSON -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "not a JSON object", cluster_reachable: false, anchor: null, descriptor: null }
+    expect: { blocking: true, status: { descriptor: fail }, detail: ["is not JSON"] }
+
+  - name: requiring a receiver over an anchor pinned without one -> conflict
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, base_hash: y } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["adds a receiver", "fresh approve and a new VSA"] }
+
+  - name: the same with serveguard_overrides.trust_anchor -> override
+    step: receiver
+    workload: { receiver_required: true, overrides: { trust_anchor: true } }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, base_hash: y } }
+    expect: { blocking: false, status: { trust anchor: override } }
+
+  - name: dropping the receiver from a pinned anchor -> conflict
+    step: receiver
+    raw: { path: "", exists: false, parse_error: "", cluster_reachable: true, descriptor: null,
+           anchor: { schema: x, receiver: { detector_digest: 4444444444444444444444444444444444444444444444444444444444444444 } } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["drops the receiver"] }
+
+  - name: a pinned anchor with another detector -> conflict
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, receiver: { detector_digest: 9999999999999999999999999999999999999999999999999999999999999999 } } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["changes the detector"] }
+
+  - name: the pinned anchor already requires this receiver -> ok
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: "{{ {'schema': 'x', 'receiver': {'detector_digest': fx['receiver-smollm2'].detector_digest}} }}" }
+    expect: { blocking: false, status: { trust anchor: ok } }
+
+  - name: receiver with Kyverno -> the policy also requires SERVEGUARD_COMPOSITION_V1
+    step: receiver
+    workload: { receiver_required: true, enforcer: kyverno }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: false, anchor: null, descriptor: "{{ fx['receiver-smollm2'] }}" }
+    expect: { blocking: false, status: { Kyverno: ok }, detail: ["SERVEGUARD_COMPOSITION_V1"] }
+
+  - name: caps beta and gamma from the collection
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_max_write_norm: 4.0, serveguard_max_typed_gain: 16.0 }
+      overrides: {}
+    expect: { blocking: false, status: { cap beta: ok, cap gamma: ok }, detail: ["||B_s C||_2 <= 16.0"] }
+
+  - name: a non-positive gamma -> fail
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_max_write_norm: 4.0, serveguard_max_typed_gain: 16.0 }
+      overrides: { serveguard_max_typed_gain: 0 }
+    expect: { blocking: true, status: { cap gamma: fail } }
+
+  - name: the github.com URI base (collection default) -> no placeholder warning
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair,
+                  serveguard_attestation_uri_base: "https://github.com/dahlem/serveguard/attestation" }
+      overrides: {}
+    expect: { blocking: false, status: { attestation URI base: ~ } }
 
   # ---- supply-chain attestation (ADR-0001) ------------------------------------------------
   - name: keypair + vap with no keys yet -> the collection generates them

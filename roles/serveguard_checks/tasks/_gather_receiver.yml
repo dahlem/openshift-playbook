@@ -1,0 +1,33 @@
+---
+# Read-only: the receiver descriptor on the controller and the trust anchor already pinned
+# in the verifier namespace (requiring a receiver changes the anchor digest).
+- name: Read the receiver descriptor
+  ansible.builtin.stat:
+    path: "{{ _sg_workload.receiver_descriptor | default('') | expanduser }}"
+  register: _sg_rcv_stat
+  when: _sg_workload.receiver_descriptor | default('') | length > 0
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    _sg_rcv_text: "{{ lookup('ansible.builtin.file', _sg_workload.receiver_descriptor | expanduser) }}"
+  when: _sg_rcv_stat.stat.exists | default(false)
+
+- name: Read the pinned trust anchor
+  kubernetes.core.k8s_info:
+    kind: ConfigMap
+    namespace: "{{ _sg_workload.verifier_namespace | default('sg-verifier') }}"
+    name: serveguard-trust-anchor
+  register: _sg_rcv_anchor
+  when: _sg_cluster_reachable | default(false) | bool
+
+- name: Collect receiver facts
+  ansible.builtin.set_fact:
+    _sg_raw_receiver:
+      path: "{{ _sg_workload.receiver_descriptor | default('') }}"
+      exists: "{{ _sg_rcv_stat.stat.exists | default(false) }}"
+      descriptor: "{{ (_sg_rcv_text | sg_parse_json) if _sg_rcv_text is defined else none }}"
+      parse_error: "{{ 'not a JSON object' if (_sg_rcv_text is defined and (_sg_rcv_text | sg_parse_json) is none) else '' }}"
+      cluster_reachable: "{{ _sg_cluster_reachable | default(false) | bool }}"
+      anchor: >-
+        {{ ((_sg_rcv_anchor.resources | default([]) | first | default({})).data | default({}))['anchor.json']
+           | default(none) | sg_parse_json }}

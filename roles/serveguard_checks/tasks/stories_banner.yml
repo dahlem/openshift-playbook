@@ -1,7 +1,8 @@
 ---
 # The story banner, built from the serveguard.openshift_ai stories role's
 # structured result: serveguard_stories_result = [{story, expected, verdict, reason}].
-# A story passes when its verdict equals the expected one.
+# A story passes when its verdict equals the expected one. The URI-base WARNING appears
+# only for a value still under the reserved .invalid TLD (the default is github.com).
 
 - name: Assert the stories result has the expected shape
   ansible.builtin.assert:
@@ -28,8 +29,16 @@
          + (serveguard_stories_result | map('sg_story_lines') | flatten)
          + ([''] + ['  adapter:      ' ~ serveguard_adapter_ref] if serveguard_adapter_ref is defined else [])
          + (['  VSA:          ' ~ ('admitted' if serveguard_vsa.admitted | bool else 'REFUSED') ~ ' for '
-             ~ serveguard_vsa.adapter_ref ~ ((' (' ~ serveguard_vsa.reason ~ ')') if serveguard_vsa.reason else '')]
+             ~ serveguard_vsa.adapter_ref ~ ((' (' ~ serveguard_vsa.reason ~ ')') if serveguard_vsa.reason else ''),
+             '  VSA digest:   ' ~ (serveguard_vsa.digest | default('', true) or 'none issued'),
+             '  levels:       ' ~ (serveguard_vsa.verified_levels | default([]) | join(', ') or 'none')]
             if serveguard_vsa is defined else [])
+         + (['  receiver:     detector ' ~ serveguard_vsa.receiver
+             ~ ' (' ~ (serveguard_receiver_stories_result | default([]) | selectattr('as_expected') | list | length)
+             ~ '/' ~ (serveguard_receiver_stories_result | default([]) | length) ~ ' receiver stories as expected)']
+            if (serveguard_vsa.receiver | default('', true)) | length > 0 else [])
+         + (['  caps:         beta ' ~ _sg_workload.max_write_norm ~ ', gamma ' ~ _sg_workload.max_typed_gain]
+            if (_sg_workload.max_write_norm is defined and _sg_workload.max_typed_gain is defined) else [])
          + (['  trust anchor: ' ~ serveguard_rendered.anchor_digest ~ ' (operator-signed)']
             if (serveguard_rendered.anchor_digest | default('')) | length > 0 else [])
          + (['  WARNING:      attestation URIs use the placeholder ' ~ _sg_workload.attestation_uri_base]

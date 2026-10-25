@@ -76,6 +76,13 @@
     - name: Run the stories
       ansible.builtin.include_role:
         name: serveguard.openshift_ai.stories
+
+    - name: Every asked story was judged; the receiver stories iff a receiver is required
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: assert_supply_chain
+      vars:
+        _sg_stage: stories
   always:
     - name: Story banner
       ansible.builtin.include_role:

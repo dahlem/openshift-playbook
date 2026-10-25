@@ -451,14 +451,21 @@ def sg_eval_versions(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
 
 
 def sg_eval_srs(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
-    """raw: path, exists, sha256 (of the local file, if it exists). req: sha256, logrows."""
+    """raw: path, exists, sha256 (of the local file, if it exists).
+    req: sha256 (effective), default_sha256 (the collection's), logrows."""
     step = "srs"
     hint = (f"supply it: -e serveguard_srs_path=~/.ezkl/srs/kzg{req.get('logrows', 19)}.srs "
-            "-e serveguard_srs_sha256=<approved SHA-256> (or in inventory/group_vars/all/site.yml); it is never downloaded")
+            "(or in inventory/group_vars/all/site.yml); the digest is the collection's kzg19 default "
+            "unless overridden; it is never downloaded")
     rows = []
     want = (req.get("sha256") or "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", want):
         rows.append(_row(step, "approved digest", "fail", "serveguard_srs_sha256 is not a SHA-256; " + hint))
+    elif want == (req.get("default_sha256") or "").lower():
+        rows.append(_row(step, "approved digest", "ok",
+                         f"{want[:16]}... (collection default for kzg{req.get('logrows', 19)}, EZKL v23.0.5 list)"))
+    else:
+        rows.append(_row(step, "approved digest", "ok", f"{want[:16]}... (override of the collection default)"))
     if not raw.get("path"):
         rows.append(_row(step, "approved SRS file", "fail", "serveguard_srs_path is not set; " + hint))
     elif not raw.get("exists"):
@@ -469,6 +476,61 @@ def sg_eval_srs(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
     else:
         rows.append(_row(step, "approved SRS file", "ok", f"{raw['path']} matches the approved SHA-256"))
     return {"rows": rows, "action": "none"}
+
+
+# ---- receiver composition certificate ------------------------------------------------------
+
+RECEIVER_SCHEMA = "serveguard-openshift-ai.receiver.v1"
+RECEIVER_STORIES = ("receiver-admitted", "receiver-tampered-witness", "receiver-tau-looser", "receiver-missing")
+
+
+def sg_eval_receiver(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]:
+    """raw: path, exists, descriptor (parsed receiver.json)|None, parse_error,
+    cluster_reachable, anchor (parsed anchor.json of an existing serveguard-trust-anchor)|None.
+    req: required, enforcer, override_anchor (serveguard_overrides.trust_anchor)."""
+    step = "receiver"
+    rows = []
+    required = bool(req.get("required"))
+    want_digest = None
+    if not required:
+        rows.append(_row(step, "receiver", "n/a", "serveguard_receiver_required is false: no composition certificate"))
+    else:
+        path = raw.get("path")
+        desc = raw.get("descriptor")
+        if not path:
+            rows.append(_row(step, "descriptor", "fail",
+                             "serveguard_receiver_descriptor is not set (evidence/receiver-smollm2.json for the default model and policy)"))
+        elif not raw.get("exists"):
+            rows.append(_row(step, "descriptor", "fail", f"{path} not found"))
+        elif desc is None:
+            rows.append(_row(step, "descriptor", "fail", f"{path} is not JSON: {raw.get('parse_error', '')}"[:200]))
+        elif desc.get("schema") != RECEIVER_SCHEMA:
+            rows.append(_row(step, "descriptor", "fail", f"{path} schema {desc.get('schema')!r}, need {RECEIVER_SCHEMA}"))
+        elif not re.fullmatch(r"[0-9a-f]{64}", str(desc.get("detector_digest", ""))):
+            rows.append(_row(step, "descriptor", "fail", f"{path} has no 64-hex detector_digest"))
+        else:
+            want_digest = desc["detector_digest"]
+            rows.append(_row(step, "descriptor", "ok", f"detector {want_digest[:16]}... from {path}"))
+            rows.append(_row(step, "stories", "ok", f"+{len(RECEIVER_STORIES)}: {', '.join(RECEIVER_STORIES)}"))
+            if req.get("enforcer") == "kyverno":
+                rows.append(_row(step, "Kyverno", "ok", "the ClusterPolicy also requires SERVEGUARD_COMPOSITION_V1"))
+    anchor = raw.get("anchor")
+    if not raw.get("cluster_reachable"):
+        rows.append(_row(step, "trust anchor", "n/a", "cluster not reachable yet"))
+    elif anchor is None:
+        rows.append(_row(step, "trust anchor", "todo", "no anchor pinned yet; trust_anchor creates it"))
+    else:
+        has = "receiver" in anchor
+        cur = (anchor.get("receiver") or {}).get("detector_digest") if has else None
+        if has == required and (not required or want_digest is None or cur == want_digest):
+            rows.append(_row(step, "trust anchor", "ok", "the pinned anchor " + ("requires this receiver" if required else "requires no receiver")))
+        else:
+            change = ("adds a receiver" if required and not has else "drops the receiver" if has and not required
+                      else f"changes the detector {str(cur)[:12]}... -> {str(want_digest)[:12]}...")
+            detail = (f"this run {change}, so the anchor digest changes: trust_anchor refuses it unless "
+                      "serveguard_overrides.trust_anchor=true, then a fresh approve and a new VSA follow")
+            rows.append(_row(step, "trust anchor", "override" if req.get("override_anchor") else "conflict", detail))
+    return {"rows": rows, "action": "none", "detector_digest": want_digest}
 
 
 # ---- machine pool -------------------------------------------------------------------
@@ -1088,6 +1150,17 @@ def sg_eval_workload(raw: dict[str, Any], req: dict[str, Any]) -> dict[str, Any]
             rows.append(_row(step, var, "fail", f"not in the collection's role defaults; update the serveguard checkout"))
         else:
             rows.append(_row(step, var, "warn", "not declared by the collection; the checks that need it are skipped"))
+    for key, sym, what in (("max_write_norm", "beta", "||B_s||_2"), ("max_typed_gain", "gamma", "||B_s C||_2")):
+        if key not in workload:
+            continue
+        try:
+            ok = float(workload[key]) > 0
+        except (TypeError, ValueError):
+            ok = False
+        rows.append(_row(step, f"cap {sym}", "ok" if ok else "fail",
+                         f"{what} <= {workload[key]}" if ok else f"serveguard_{key} {workload[key]!r} is not a positive number"))
+    # The collection's default is github.com/dahlem/serveguard/attestation; only a value
+    # still under the reserved .invalid TLD is a placeholder.
     base = str(workload.get("attestation_uri_base") or "")
     if base and re.search(r"\.invalid(/|$)", base):
         rows.append(_row(step, "attestation URI base", "warn",
@@ -1270,6 +1343,19 @@ def sg_get(d: Any, key: str) -> Any:
     return d.get(key) if isinstance(d, dict) else None
 
 
+def sg_parse_json(text: Any) -> Any:
+    """A JSON object from text (Ansible may already have parsed it), or None."""
+    import json
+
+    if isinstance(text, dict):
+        return text
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def sg_rc_ok(results: dict[str, dict[str, Any]]) -> dict[str, bool]:
     return {k: v.get("rc") == 0 for k, v in (results or {}).items()}
 
@@ -1386,6 +1472,7 @@ class FilterModule:
             "sg_merge_rows": sg_merge_rows,
             "sg_command_results": sg_command_results,
             "sg_rc_ok": sg_rc_ok,
+            "sg_parse_json": sg_parse_json,
             "sg_get": sg_get,
             "sg_operator_diag": sg_operator_diag,
             "sg_quota_value": sg_quota_value,
@@ -1403,6 +1490,7 @@ class FilterModule:
             "sg_eval_cluster": sg_eval_cluster,
             "sg_eval_versions": sg_eval_versions,
             "sg_eval_srs": sg_eval_srs,
+            "sg_eval_receiver": sg_eval_receiver,
             "sg_eval_signing": sg_eval_signing,
             "sg_eval_kyverno": sg_eval_kyverno,
             "sg_eval_rhtas": sg_eval_rhtas,

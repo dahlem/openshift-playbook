@@ -22,8 +22,6 @@
     ai_platform_mode: standard
     serveguard_accelerator: cpu
     serveguard_openshift_range: guide
-    serveguard_srs_path: /home/demo/.ezkl/srs/kzg19.srs
-    serveguard_srs_sha256: "{{ 'ab' * 32 }}"
   tasks:
     - name: Load version constraints
       ansible.builtin.include_vars: { file: "{{ versions_file }}", name: versions }
@@ -133,6 +131,35 @@
               # capacity is N/A, not FAIL: the serving pool that would hold the predictor is still TODO
               - _blocked | sort == ['cluster/version', 'operator rhoai/Subscription', 'platform/DataScienceCluster'] | sort
               - _sg_checks | selectattr('step', 'equalto', 'capacity') | selectattr('status', 'equalto', 'n/a') | map(attribute='check') | sort == ['predictor (+guard init)', 'predictor + story Job', 'publisher prove Job', 'verifier approve Job']
+            fail_msg: "{{ _blocked }}"
+          vars:
+            _blocked: >-
+              {{ _sg_checks | selectattr('status', 'in', ['fail', 'conflict'])
+                 | map(attribute='step') | zip(_sg_checks | selectattr('status', 'in', ['fail', 'conflict']) | map(attribute='check'))
+                 | map('join', '/') | list }}
+
+    # ---- re-run with a required receiver over an anchor pinned without one
+    - name: Reset the table
+      ansible.builtin.set_fact:
+        _sg_checks: []
+
+    - name: Preflight a receiver switch
+      block:
+        - name: Run the preflight
+          ansible.builtin.include_role: { name: serveguard_checks, tasks_from: preflight }
+          vars:
+            serveguard_checks_fixtures: "{{ worlds.receiver_switch }}"
+        - name: Print the table (fails on blocking rows)
+          ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: "preflight did not fail on the anchor change"
+      rescue:
+        - name: Receiver switch - only the anchor change blocks
+          ansible.builtin.assert:
+            that:
+              - _blocked == ['receiver/trust anchor']
+              - _sg_receiver.detector_digest == fx['receiver-smollm2'].detector_digest
             fail_msg: "{{ _blocked }}"
           vars:
             _blocked: >-

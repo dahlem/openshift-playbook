@@ -25,7 +25,9 @@ _quota_ok:
   quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
   instances: []
 _unreachable_op: { cluster_reachable: false }
-_srs_ok: { path: /home/demo/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+_srs_ok: { path: /home/demo/.ezkl/srs/kzg19.srs, exists: true, sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+_receiver_none: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: false, anchor: null }
+_receiver_none_reachable: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: true, anchor: null }
 _versions_list: "{{ fx['rosa-versions'] }}"
 _workload_stub:
   collection: { name: serveguard.openshift_ai, version: 0.0.0-stub, path: /stub/serveguard/openshift_ai }
@@ -57,7 +59,14 @@ _workload_stub:
     serveguard_rhtas_trust_config: ""
     serveguard_rhtas_oidc_issuer: ""
     serveguard_fulcio_audience: sigstore
-    serveguard_attestation_uri_base: https://serveguard.invalid/attestation
+    serveguard_attestation_uri_base: https://github.com/dahlem/serveguard/attestation
+    serveguard_srs_path: /home/demo/.ezkl/srs/kzg19.srs
+    serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d
+    serveguard_max_write_norm: 4.0
+    serveguard_max_typed_gain: 16.0
+    serveguard_receiver_required: false
+    serveguard_receiver_descriptor: ""
+    serveguard_overrides: {}
     serveguard_kyverno_namespace: kyverno
     serveguard_namespace: serveguard-demo
     serveguard_image: ""
@@ -72,10 +81,15 @@ _ready_pod:
 _workload_keyless_kyverno: >-
   {{ _workload_stub | combine({'overrides': {'serveguard_signing_mode': 'keyless', 'serveguard_enforcer': 'kyverno'}}) }}
 
+_workload_receiver: >-
+  {{ _workload_stub | combine({'overrides': {'serveguard_receiver_required': true,
+                                             'serveguard_receiver_descriptor': 'evidence/receiver-smollm2.json'}}) }}
+
 worlds:
   empty_account: &empty_account
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    receiver: "{{ _receiver_none }}"
     signing: { keys: {} }
     image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
@@ -93,9 +107,10 @@ worlds:
     capacity: { cluster_reachable: false }
     workload: "{{ _workload_stub }}"
 
-  all_satisfied:
+  all_satisfied: &all_satisfied
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    receiver: "{{ _receiver_none }}"
     signing: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.key, k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
     image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
@@ -121,6 +136,7 @@ worlds:
   mistral_cluster:   # an existing Knative/Mistral install on an old cluster
     local: "{{ _local_ok }}"
     srs: "{{ _srs_ok }}"
+    receiver: "{{ _receiver_none }}"
     signing: { keys: {} }
     image_policy: { existing: null, key_exists: false, key_data: "" }
     aws: "{{ _aws_ok }}"
@@ -145,3 +161,15 @@ worlds:
     <<: *empty_account
     workload: "{{ _workload_keyless_kyverno }}"
     operators: ["{{ _unreachable_op }}", "{{ _unreachable_op }}", "{{ _unreachable_op }}", "{{ _unreachable_op }}"]
+
+  # A finished keypair deployment re-run with a required receiver: the pinned anchor has none.
+  receiver_switch:
+    <<: *all_satisfied
+    workload: "{{ _workload_receiver }}"
+    receiver:
+      path: evidence/receiver-smollm2.json
+      exists: true
+      parse_error: ""
+      cluster_reachable: true
+      descriptor: "{{ fx['receiver-smollm2'] }}"
+      anchor: { schema: serveguard-openshift-ai.trust-anchor.v1, base_hash: ecf2f3e1 }

@@ -1,58 +1,54 @@
 ---
-# The demo-level postcondition of the serving_consumer role, asserted on its
-# result rather than re-read from the cluster. Interface (to reconcile with the
-# collection): serveguard_serving_result =
-#   {inference_service, ready, guard_exit_code,
-#    annotations: {serveguard.io/admitted, /adapter-digest, /package-root, /base-hash}}
-# With _sg_digest_before set (after the stories), the adapter digest must be unchanged.
+# The demo-level postcondition of the serving_consumer role, asserted on its result
+# rather than re-read from the cluster. serveguard_serving_result =
+#   {inference_service, adapter_ref, ready, guard_exit_code, annotations}
+# adapter_ref is the digest-pinned SERVEGUARD_ADAPTER_REF the guard pulled and checked
+# (null without the supply chain). With the supply chain it must equal the publisher's
+# serveguard_adapter_ref, here and again after the stories (_sg_digest_before set).
+# Without it (a collection predating ADR-0001), the serveguard.dahlem.github.io/ verdict
+# annotations carry the verdict and the adapter digest instead.
 
 - name: Assert the serving consumer's result
   ansible.builtin.assert:
     that:
       - serveguard_serving_result is defined
       - serveguard_serving_result.ready | default(false) | bool
-      # With supply-chain attestation (ADR-0001) the verdict annotations are gone: the
-      # VSA (asserted after admit) and the guard carry the verdict instead.
-      - _sg_sc or (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('') == 'true'
-      - _sg_sc or _sg_verdict_missing | length == 0
       - serveguard_serving_result.guard_exit_code | default(-1) | int == 0
+      # supply chain: the served reference is the published one
+      - not _sg_sc or (serveguard_serving_result.adapter_ref | default('', true)) is match(_sg_ref)
+      - not _sg_sc or serveguard_serving_result.adapter_ref == serveguard_adapter_ref | default('')
+      # pre-supply-chain collection: the verdict annotations
+      - _sg_sc or _sg_annotations[_sg_prefix ~ 'admitted'] | default('') == 'true'
+      - _sg_sc or _sg_verdict_missing | length == 0
       - _sg_digest_before | default('') | length == 0 or _sg_digest_now == _sg_digest_before
     fail_msg: >-
       ServeGuard serving postcondition failed for
       {{ serveguard_serving_result.inference_service | default('the InferenceService') }}:
       ready={{ serveguard_serving_result.ready | default('undefined') }},
-      admitted={{ (serveguard_serving_result.annotations | default({}))['serveguard.io/admitted'] | default('absent') }},
-      missing verdict annotations={{ _sg_verdict_missing }},
-      guard exit={{ serveguard_serving_result.guard_exit_code | default('undefined') }}
-      {{ ', adapter digest changed ' ~ _sg_digest_before ~ ' -> ' ~ _sg_digest_now
+      guard exit={{ serveguard_serving_result.guard_exit_code | default('undefined') }},
+      {{ ('served adapter_ref=' ~ (serveguard_serving_result.adapter_ref | default('none', true))
+          ~ ' (published ' ~ (serveguard_adapter_ref | default('undefined')) ~ ')')
+         if _sg_sc else
+         ('admitted=' ~ _sg_annotations[_sg_prefix ~ 'admitted'] | default('absent')
+          ~ ', missing verdict annotations=' ~ (_sg_verdict_missing | join(','))) }}
+      {{ ', adapter changed ' ~ _sg_digest_before ~ ' -> ' ~ _sg_digest_now
          if (_sg_digest_before | default('') | length > 0 and _sg_digest_now != _sg_digest_before) else '' }}
   vars:
-    _sg_verdict_missing: >-
-      {{ ['serveguard.io/adapter-digest', 'serveguard.io/package-root', 'serveguard.io/base-hash']
-         | reject('in', (serveguard_serving_result.annotations | default({})) | dict2items
-                        | rejectattr('value', 'falsy') | map(attribute='key') | list) | list }}
     _sg_sc: "{{ _sg_workload.supply_chain | default(false) | bool }}"
-    # With supply chain the annotations are gone and serveguard_serving_result carries no
-    # adapter reference: the comparison then uses serveguard_serving_result.adapter_ref
-    # only if a future collection adds it (see the note task below).
+    _sg_prefix: serveguard.dahlem.github.io/
+    _sg_ref: '^oci://[^@\s]+@sha256:[0-9a-f]{64}$'
+    _sg_annotations: "{{ serveguard_serving_result.annotations | default({}, true) }}"
+    _sg_verdict_missing: >-
+      {{ ['adapter-digest', 'package-root', 'base-hash'] | map('regex_replace', '^', _sg_prefix)
+         | reject('in', _sg_annotations | dict2items | rejectattr('value', 'falsy') | map(attribute='key') | list)
+         | list }}
     _sg_digest_now: >-
-      {{ serveguard_serving_result.adapter_ref | default(_sg_digest_before | default(''))
-         if (_sg_workload.supply_chain | default(false) | bool)
-         else (serveguard_serving_result.annotations | default({}))['serveguard.io/adapter-digest'] | default('') }}
+      {{ serveguard_serving_result.adapter_ref | default('', true) if _sg_sc
+         else _sg_annotations[_sg_prefix ~ 'adapter-digest'] | default('') }}
 
-- name: The served adapter reference is not observable from the collection's facts
-  ansible.builtin.debug:
-    msg: >-
-      serveguard_serving_result has no adapter_ref: the unchanged-digest check after the
-      stories relies on the guard (which refuses other bytes) and on the stories' own verdicts.
-  when:
-    - _sg_digest_before | default('') | length > 0
-    - _sg_workload.supply_chain | default(false) | bool
-    - serveguard_serving_result.adapter_ref is not defined
-
-- name: Remember the admitted adapter digest (the digest-pinned adapter ref with supply chain)
+- name: Remember the served adapter (digest-pinned ref with the supply chain)
   ansible.builtin.set_fact:
     _sg_admitted_digest: >-
-      {{ serveguard_serving_result.adapter_ref | default(serveguard_adapter_ref | default(''))
+      {{ serveguard_serving_result.adapter_ref
          if (_sg_workload.supply_chain | default(false) | bool)
-         else serveguard_serving_result.annotations['serveguard.io/adapter-digest'] }}
+         else serveguard_serving_result.annotations['serveguard.dahlem.github.io/adapter-digest'] }}

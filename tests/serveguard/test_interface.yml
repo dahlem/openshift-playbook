@@ -93,32 +93,55 @@
         that: _includes | reject('search', '^teardown/') | list == _demo_order + ['serving_consumer/tasks/serve']
         fail_msg: "ours {{ _includes }} vs demo.yml {{ _demo_order }}"
 
-    # The facts assert_supply_chain.yml / stories_banner.yml read, as the real roles set them.
-    - name: The real roles set the supply-chain facts this repository asserts
+    # The facts assert_supply_chain.yml / assert_serving.yml / stories_banner.yml read,
+    # as the real roles set them (fact files, not prose).
+    - name: The real roles set the facts this repository asserts
       ansible.builtin.assert:
         that:
           - _pub is search('serveguard_adapter_ref:')
           - _pub is search('serveguard_attestations:')
-          - _admit is search('serveguard_vsa:')
-          - _admit is search('adapter_ref:') and _admit is search('admitted:') and _admit is search('reason:')
+          - _pub is search('serveguard_receiver_block:')
+          - _vsa is search('serveguard_vsa:')
+          - _vsa_keys | difference(_vsa_found) | length == 0
+          - _serving is search('serveguard_serving_result:') and _serving is search('adapter_ref:')
+          - _serving is search('SERVEGUARD_ADAPTER_REF')
+          - _stories is search('serveguard_receiver_stories_result:')
           - _anchor is search('serveguard_rendered[.]anchor_signed')
           - _common is search('serveguard_rendered:')
+          - _cli is search(_cli_stories)
           - _chain is search('attestations\\["oms"\\]') and _chain is search('attestations\\["confinement"\\]')
-          - _keygen is search('[.]key') and _keygen is search("\\['operator'\\]")
-        fail_msg: "the collection's supply-chain facts changed; update assert_supply_chain.yml"
+          - _common is search("\\['operator'\\]") and _common is search('[.]key')
+          # the collection's label/annotation prefix (the playbook matches it)
+          - _serving is search('serveguard[[][.][]]dahlem[[][.][]]github[[][.][]]io/')
+          - _all_roles is not search('serveguard[.]io/')
+        fail_msg: >-
+          the collection's facts changed; update assert_supply_chain.yml / assert_serving.yml
+          (vsa keys found {{ _vsa_found }}, expected {{ _vsa_keys }})
       vars:
         _pub: "{{ lookup('ansible.builtin.file', real ~ '/roles/publisher/tasks/main.yml') }}"
-        _admit: "{{ lookup('ansible.builtin.file', real ~ '/roles/public_verifier/tasks/admit.yml') }}"
+        _vsa: "{{ lookup('ansible.builtin.file', real ~ '/roles/public_verifier/tasks/vsa_fact.yml') }}"
+        _vsa_keys: [adapter_ref, digest, admitted, reason, verified_levels, receiver]
+        _vsa_found: "{{ _vsa | regex_findall('(?m)^ {6}([a-z_]+):') }}"
+        _serving: "{{ lookup('ansible.builtin.file', real ~ '/roles/serving_consumer/tasks/serving_fact.yml') }}"
+        _stories: "{{ lookup('ansible.builtin.file', real ~ '/roles/stories/tasks/main.yml') }}"
         _anchor: "{{ lookup('ansible.builtin.file', real ~ '/roles/trust_anchor/tasks/main.yml') }}"
         _common: "{{ lookup('ansible.builtin.file', real ~ '/roles/common/tasks/main.yml') }}"
-        _keygen: "{{ _common }}"
+        _cli: "{{ lookup('ansible.builtin.file', real ~ '/../src/serveguard_openshift_ai/cli.py') }}"
+        # render-demo's JSON names the stories the render runs (serveguard_rendered.stories)
+        _cli_stories: >-
+          "stories": [[]entry[.]name for entry in config[.]stories[(][)][]]
         _chain: "{{ lookup('ansible.builtin.file', real ~ '/../../supply-chain/src/serveguard_supplychain/chain.py') }}"
+        _all_roles: "{{ lookup('ansible.builtin.pipe', 'cat ' ~ real ~ '/roles/*/tasks/*.yml ' ~ real ~ '/roles/*/defaults/*.yml') }}"
 
-    - name: serveguard_serving_result carries no adapter reference (the after-stories note applies)
-      ansible.builtin.debug:
-        msg: "serving_consumer serve sets adapter_ref: {{ _serve is search('adapter_ref') }}"
-      vars:
-        _serve: "{{ lookup('ansible.builtin.file', real ~ '/roles/serving_consumer/tasks/serve.yml') }}"
+    - name: The receiver variables and the SRS default exist in roles/common
+      ansible.builtin.assert:
+        that:
+          - "'serveguard_receiver_required' in _real_defaults and 'serveguard_receiver_descriptor' in _real_defaults"
+          - _real_defaults.serveguard_receiver_required | bool is false
+          - _real_defaults.serveguard_srs_sha256 == 'd1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d'
+          - "'serveguard_max_typed_gain' in _real_defaults and 'serveguard_max_write_norm' in _real_defaults"
+          - _real_defaults.serveguard_attestation_uri_base is not search('[.]invalid')
+          - (real ~ '/../evidence/receiver-smollm2.json') is file
 
     - name: Pool sizing with the real requests (plan check)
       ansible.builtin.include_role: { name: serveguard_checks, tasks_from: _evaluate_quota.yml }

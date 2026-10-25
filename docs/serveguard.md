@@ -265,10 +265,13 @@ Platform steps run as *pre → step → post* (`playbooks/includes/serveguard-de
    postconditions, skips what already holds and stops on conflicts. The playbook
    does not re-read the cluster for the demo. It asserts on the roles' results:
    - after `serving_consumer`, `serveguard_serving_result` must be ready, with
-     `serveguard.io/admitted: "true"`, the adapter-digest, package-root and
-     base-hash annotations, and guard exit code 0;
+     guard exit code 0 and an `adapter_ref` (the guard's `SERVEGUARD_ADAPTER_REF`)
+     equal to the publisher's digest-pinned `serveguard_adapter_ref`. A collection
+     without the supply chain carries the verdict in the
+     `serveguard.dahlem.github.io/admitted`, `adapter-digest`, `package-root` and
+     `base-hash` annotations instead;
    - after `stories`, `serving_consumer` `tasks_from: serve` re-observes the
-     service. The same must hold, with the adapter digest unchanged;
+     service. The same must hold, with the same served adapter reference;
    - the `stories` role fails by itself on any unexpected verdict. The banner,
      built from its `serveguard_stories_result`, prints in `always:` either way.
      The refused services are among the stories. Variables a scenario or `-e` sets
@@ -333,7 +336,10 @@ ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard
 Pass the scenario you deployed: it selects which operators and which pool to
 remove. The teardown runs `serveguard.openshift_ai.teardown` (the workload,
 including the cluster-scoped policy and binding), then checks that `serveguard-demo`,
-`sg-publisher`, `sg-verifier` and `sg-attestations` and the policy are gone. It then deletes the DSC and DSCI, the operator subscriptions
+`sg-publisher`, `sg-verifier` and `sg-attestations` and the policy are gone. The
+collection's teardown does not remove `sg-attestations` nor, with `enforcer: kyverno`,
+the ClusterPolicy `serveguard-require-vsa-serveguard-demo`, so the playbook deletes
+exactly those two by name first. It then deletes the DSC and DSCI, the operator subscriptions
 and CSVs, and the serving pool. CRDs are left in place. To remove the one-time
 account resources afterwards, delete the network stack (`rosa create network`
 printed its CloudFormation stack name), the OIDC config (`rosa delete oidc-config`)
@@ -370,7 +376,8 @@ fixed. The deploy stops at the first blocking row. The preflight reports all row
 | workload requests | `serveguard.openshift_ai` not installed; its role defaults lack `serveguard_predictor_cpu`/`_memory` (other requests missing: `WARN`, their capacity rows are left out) | - | - |
 | AWS account (bootstrap output) | no AWS session or ROSA login; site.yml incomplete; OIDC config, installer/support/worker roles or ELB service-linked role missing; subnets missing or in different VPCs; < 8 free subnet tags | - | - |
 | quotas | instance type not offered in the private subnet's AZ or not ROSA-supported; Standard (`L-1216C47A`) or G/VT (`L-DB2E81BA`) vCPU quota minus running vCPUs < vCPUs this run adds (2 workers if the cluster is new + the serving pool if new); serving type cannot hold predictor + one Job (vCPU/memory minus `serveguard_node_overhead`); `nvidia` on a non-GPU type | - | - |
-| approved SRS | `serveguard_srs_path` unset or missing on the controller, `serveguard_srs_sha256` not 64 hex, or the file's SHA-256 differs; never downloaded | - | - |
+| receiver | required but the descriptor is unset, missing, not JSON, of another schema or without a 64-hex detector digest; a pinned anchor whose receiver differs from this run's (`CONFLICT` unless `serveguard_overrides.trust_anchor`) | - | - |
+| approved SRS | `serveguard_srs_path` unset or missing on the controller, the effective `serveguard_srs_sha256` (collection default kzg19, or an override) not 64 hex, or the file's SHA-256 differs; never downloaded | - | - |
 | OpenShift version (new cluster) | `rosa list versions --hosted-cp` offers no enabled stable version in the range (`guide`: 4.19.9 <= v < 4.21, default; `article`: < 4.23) | the cluster exists | - |
 | cluster | exists but ROSA classic, other region, state `error`/`uninstalling`, or OpenShift outside the range (`serveguard_openshift_range`, `serveguard_allow_cluster_version`); on-cluster playbook: absent | `ready` at a supported version | `ready` (`cluster_wait_timeout`), oc logged in to its API; diag: `rosa describe`, `rosa logs install` |
 | serving pool | exists with another instance type, replicas/autoscaling, taints, labels or subnet (`serveguard_allow_pool_mismatch` uses it as is) | exists as specified with a Ready node | a Ready node of the type (`node_wait_timeout`); diag: pool status, nodes, node events |
@@ -420,18 +427,21 @@ that only the article covers them. `versions.yml` `cluster.openshift_version`
 The proofs use a KZG structured reference string (SRS). The collection copies an
 operator-approved SRS from the controller into each trust domain's store and
 checks its SHA-256 there. Nothing downloads it. For `serveguard_logrows: 19`
-(the collection default) that is `kzg19.srs`. Supply the file and its approved
-digest, in `inventory/group_vars/all/site.yml` (not committed) or with `-e`:
+(the collection default) that is `kzg19.srs`. The collection pins its digest:
+`serveguard_srs_sha256` defaults to
+`d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d`, the kzg19
+entry of EZKL v23.0.5's upstream list. Supply only the file's path, in
+`inventory/group_vars/all/site.yml` (not committed) or with `-e`:
 
 ```yaml
 serveguard_srs_path: ~/.ezkl/srs/kzg19.srs
-serveguard_srs_sha256: <the approved SHA-256, 64 hex>
+# serveguard_srs_sha256: <only for another approved SRS>
 ```
 
-Get the file through your organisation's approved channel. Compute and compare
-the digest yourself (`shasum -a 256 ~/.ezkl/srs/kzg19.srs`) against the value you
-were given. The preflight's `srs` row fails if the path is unset or missing, or if
-the digest differs. The collection repeats the check before copying.
+The preflight accepts the default digest (row "collection default") or an
+override (row "override"). Either way it hashes the local file, and the
+`approved SRS file` row fails if the path is unset or missing, or if the file's
+SHA-256 differs. The collection repeats the check before copying.
 
 ## Supply-chain attestation
 
@@ -459,12 +469,61 @@ It is signed with the operator key pair (`operator.key` in
 key never leaves the controller. The verifier and the guard accept the anchor only
 under that pinned key.
 
-**Attestation URI base.** `serveguard_attestation_uri_base` defaults to the
-placeholder `https://serveguard.invalid/attestation`. Predicate types, the VSA
-policy URI and verifier ids live under it. The preflight's `workload` rows and the
-story banner show a `WARN` until you set it to a domain or repository path you
-control. The demo works with the placeholder, but don't share or register
-attestations under it.
+**Attestation URI base.** `serveguard_attestation_uri_base` defaults to
+`https://github.com/dahlem/serveguard/attestation`. Predicate types, the VSA policy
+URI and verifier ids live under it. Only a value under the reserved `.invalid` TLD
+(the old placeholder) still makes the preflight and the banner warn.
+
+**Write caps.** The anchor pins two caps that the consumer's guard enforces:
+β = `serveguard_max_write_norm` (default 4.0) on ‖B_s‖₂, and
+γ = `serveguard_max_typed_gain` (default 16.0) on ‖B_s C‖₂. The preflight lists
+both and fails on a non-positive value. The banner shows them.
+
+**Labels and annotations.** The collection's keys use the prefix
+`serveguard.dahlem.github.io/`; `serveguard.io/` is gone. A URL with slashes is
+not a valid Kubernetes prefix. This repository matches that prefix everywhere.
+
+### Receiver composition certificate (optional)
+
+With `-e @scenarios/serveguard/receiver.yml`, the anchor requires a receiver.
+That sets `serveguard_receiver_required: true` and points
+`serveguard_receiver_descriptor` at `evidence/receiver-smollm2.json`, the
+descriptor fitted for the default SmolLM2 model and policy. The collection's
+default is off. This is the factored composition certificate of the serveguard
+playbook's Chapter 8:
+
+- the anchor pins the descriptor's detector digest, τ and the per-layer bound
+  ceilings, so **its digest changes**. Anchors without a receiver keep their old
+  digest;
+- every publication certifies its composition (`serveguard_receiver_block`
+  `{detector_digest, bounds: {layer: "n/d"}}`), and the publisher namespace gains
+  the ConfigMap `serveguard-receiver-detector`;
+- the VSA gains `SERVEGUARD_COMPOSITION_V1` next to `SERVEGUARD_CONFINEMENT_V1`,
+  and `serveguard_vsa.receiver` names the detector. With `enforcer: kyverno` the
+  ClusterPolicy also requires the composition level (a second `AnyIn` condition);
+- the guard re-checks every witness on the served write factor;
+- the stories role runs four more stories (`receiver-admitted`,
+  `receiver-tampered-witness`, `receiver-tau-looser`, `receiver-missing`). With a
+  receiver, `serveguard_rendered.stories` lists 4 more names, and every one of
+  them must come back judged;
+- consumers recompute ω and refuse a declared ω below it. A larger declared ω is
+  still accepted. The receiver file records exactly the recomputed value.
+
+The preflight's `receiver` rows check four things. First, the descriptor exists,
+is JSON with the `serveguard-openshift-ai.receiver.v1` schema and a 64-hex
+`detector_digest`. Second, they read the anchor already pinned in `sg-verifier`
+(`serveguard-trust-anchor`, `anchor.json`). Third, if that anchor's receiver
+differs from what this run requires (added, dropped or another detector), the row
+is a `CONFLICT`: `trust_anchor` would refuse it. Set
+`-e '{"serveguard_overrides": {"trust_anchor": true}}'` to replace it, and expect a
+fresh approve and a new VSA. Fourth, with Kyverno, they note the second policy
+condition. The receiver stories create the serving Secrets
+`story-receiver-{tampered-witness,tau-looser,missing}-private`, the
+InferenceServices `story-receiver-{admitted,tampered-witness,tau-looser,missing}`
+and the ConfigMaps `story-pins-receiver-*`. All of them are namespaced, so the
+teardown's namespace deletion removes them. The guard Jobs of these stories use
+the tools-Job requests and co-locate with the predictor, which the capacity
+check's "predictor + story Job" row already covers.
 
 ### Modes
 
@@ -563,24 +622,24 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace --version <ch
 
 | After | Fact | Must hold |
 |-------|------|-----------|
-| `trust_anchor` | `serveguard_rendered.anchor_digest`, `.anchor_signed` | a SHA-256, and operator-signed (every mode) |
+| `trust_anchor` | `serveguard_rendered` `{anchor_digest, anchor_signed, receiver, stories}` | a SHA-256; operator-signed (every mode); `receiver.required` equals `serveguard_receiver_required`, and with a receiver its `detector_digest` equals the descriptor's, with `tau` and `max_bound` present; the 4 receiver stories are in `stories` exactly when a receiver is required |
 | `publisher` | `serveguard_adapter_ref` | `oci://<registry>/<repo>@sha256:<64 hex>`: digest-pinned, never a tag |
 | `publisher` | `serveguard_attestations` | `oms` and `confinement` present (`provenance` when built); each value the SHA-256 of its attached bundle |
-| `public_verifier` admit | `serveguard_vsa` = `{adapter_ref, admitted, reason}` | `admitted` true, and `adapter_ref` digest-pinned and equal to the publisher's |
-| `serving_consumer` serve (twice) | `serveguard_serving_result` | ready, guard exit code 0 |
+| `publisher` | `serveguard_receiver_block` | with a receiver, `{detector_digest, bounds}` for the anchor's detector, with non-empty bounds; otherwise none |
+| `public_verifier` admit | `serveguard_vsa` = `{adapter_ref, digest, admitted, reason, verified_levels, receiver}` | `admitted`; `digest` (the SHA-256 of the signed VSA bundle) a SHA-256; `adapter_ref` equal to the publisher's; `SERVEGUARD_CONFINEMENT_V1` in `verified_levels`; `SERVEGUARD_COMPOSITION_V1` present exactly when a receiver is required; `receiver` the anchor's detector digest, or `""` |
+| `serving_consumer` serve (twice) | `serveguard_serving_result` `{inference_service, adapter_ref, ready, guard_exit_code, annotations}` | ready; guard exit code 0; `adapter_ref` equal to the publisher's, before and after the stories |
+| `stories` | `serveguard_stories_result`, `serveguard_receiver_stories_result` | every story the render asked for (narrowed by `serveguard_stories`) judged; the receiver stories are exactly the four when required (else `[]`), all as expected |
 
-The collection does not expose the VSA's own digest (`serveguard_vsa` has no
-digest field). The banner therefore shows the VSA verdict and the reference it
-covers, not a VSA digest. Inspect the VSA in the registry instead (below).
-`serveguard_serving_result` carries no adapter reference either. After the stories,
-the "same adapter digest" check therefore rests on the guard, which refuses any
-other bytes, and on the stories' own verdicts. A debug line says so. With the
-supply-chain collection, the `serveguard.io/admitted` and digest annotations are
-gone; the VSA and the guard carry the verdict. A collection that predates ADR-0001
-(it does not declare `serveguard_signing_mode`) is detected. For it, these
-assertions are skipped with a note, and the annotation checks apply. The story
-banner adds the adapter reference, the VSA verdict, the trust-anchor digest and,
-while it is the placeholder, a `WARNING` for the attestation URI base.
+The story banner adds:
+- the adapter reference;
+- the VSA verdict, digest and verified levels;
+- the receiver detector, with the receiver stories that came back as expected;
+- the caps β and γ;
+- the trust-anchor digest.
+
+A collection that predates ADR-0001 (it does not declare `serveguard_signing_mode`)
+is detected. For it, the supply-chain assertions are skipped with a note, and the
+`serveguard.dahlem.github.io/` annotation checks apply instead.
 
 ### Inspecting the VSA
 
@@ -648,7 +707,10 @@ default, set `serveguard.rhoai_channel: stable-3.6` in `versions.yml`.
 | `serveguard_predictor_cpu` / `serveguard_predictor_memory` | collection default (`"4"` / `8Gi`) | set only to override; the capacity checks follow |
 | `serveguard_namespace`, `serveguard_image`, `serveguard_storage_class`, `serveguard_store_access_mode`, `serveguard_<workload>_cpu`/`_memory` (`receiver_build`, `job`, `guard`) | collection defaults | read by the platform checks (`serveguard_workload_vars`); set only to override |
 | `serveguard_openshift_range` | `guide` | `guide`: 4.19.9 <= v < 4.21 (both sources); `article`: < 4.23 (4.21/4.22) |
-| `serveguard_srs_path` / `serveguard_srs_sha256` | unset (required) | the approved KZG SRS on the controller and its SHA-256 |
+| `serveguard_srs_path` / `serveguard_srs_sha256` | unset (required) / kzg19 `d1a1655b…204d` (collection) | the approved KZG SRS on the controller and its SHA-256 |
+| `serveguard_max_write_norm` / `serveguard_max_typed_gain` | 4.0 / 16.0 (collection) | the anchor's caps β and γ |
+| `serveguard_receiver_required` / `serveguard_receiver_descriptor` | `false` / `""` (collection); `scenarios/serveguard/receiver.yml` sets `true` / `evidence/receiver-smollm2.json` | the receiver composition certificate |
+| `serveguard_overrides` | `{}` (collection) | e.g. `{trust_anchor: true}` to replace a pinned anchor |
 | `serveguard_repo_dir` / `serveguard_cli` | sibling `../serveguard`, `uv run --project ...` | where the collection builds the receiver from, and its CLI |
 | `serveguard_allow_cluster_version` | `false` | accept a cluster outside the range |
 | `serveguard_signing_mode` / `serveguard_enforcer` | collection default `keypair` / `vap` (scenario mode files) | supply-chain mode |

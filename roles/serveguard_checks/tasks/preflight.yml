@@ -35,6 +35,8 @@
   when: serveguard_accelerator == 'nvidia'
 - name: DataScienceCluster
   ansible.builtin.include_tasks: pre_platform.yml
+- name: Receiver composition certificate (and the pinned anchor)
+  ansible.builtin.include_tasks: pre_receiver.yml
 - name: Internal image registry
   ansible.builtin.include_tasks: pre_registry.yml
 - name: Storage
