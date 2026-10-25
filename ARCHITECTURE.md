@@ -281,6 +281,39 @@ If OCM releases a new API version (e.g., `accounts_mgmt/v2`):
    ansible-playbook playbooks/step-cluster-access.yml -e @profiles/my-team.yml
    ```
 
+### Selecting Operators and the AI Platform Shape
+
+Two variables in `inventory/group_vars/all/config.yml` decide what the shared roles
+install. Their defaults are the Knative stack the Mistral scenarios use:
+
+```yaml
+operators_enabled: [nfd, gpu, serverless, servicemesh, rhoai]   # keys of versions.operators
+rhoai_channel: "{{ versions.operators.rhoai.channel }}"
+ai_platform_mode: serverless       # standard = DSC v2, KServe RawDeployment only
+```
+
+Channels and packages stay in `versions.yml`. Where each operator lives
+(namespaces, `OperatorGroup`, `Subscription`, proof CRDs) is in
+`roles/operators/defaults/main.yml` (`operators_install`). To add an operator,
+add an entry to both files and list its key in a scenario's `operators_enabled`.
+`ai_platform` dispatches each phase to `_<phase>_<mode>.yml`. A new platform shape
+is a new set of those three files plus an entry in `ai_platform_api_versions`.
+See `scenarios/serveguard/*.yml` for a scenario that uses both.
+
+### Guarded Steps (ServeGuard playbooks)
+
+The ServeGuard playbooks wrap each shared platform role in `roles/serveguard_checks`
+(the workload is the `serveguard.openshift_ai` collection, which guards its own
+roles):
+`pre_<step>.yml` reads the state (`_gather_<step>.yml`, read-only), decides
+(`_evaluate_<step>.yml`), and records rows. The playbook runs the role only when
+the decision asks for it, then runs `post_<step>.yml`. The decisions are pure
+Python filters (`filter_plugins/serveguard_checks.py`) over the gathered JSON, so
+`tests/serveguard/` can test skip, conflict and insufficient-resource outcomes
+offline with fixtures. The shared roles gained only inert hooks, unset by default:
+`operators_subset`, `operators_existing_operator_groups` and
+`operators_apply_channel_change`.
+
 ### Adding a New Scenario
 
 Create `scenarios/my-scenario.yml`:

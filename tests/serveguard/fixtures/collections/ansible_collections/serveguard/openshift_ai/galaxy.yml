@@ -1,0 +1,9 @@
+---
+# Stub of the serveguard.openshift_ai collection (tests/serveguard only). It
+# implements the interface openshift-playbook codes against: the role names, the
+# workload variables in role defaults, and serveguard_stories_result.
+namespace: serveguard
+name: openshift_ai
+version: 0.0.0-stub
+readme: README.md
+authors: [openshift-playbook tests]

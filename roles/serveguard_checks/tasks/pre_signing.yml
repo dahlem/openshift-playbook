@@ -1,0 +1,13 @@
+---
+- name: "pre signing: read state"
+  ansible.builtin.include_tasks: _gather_signing.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre signing: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_signing: "{{ serveguard_checks_fixtures.signing }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre signing: decide"
+  ansible.builtin.include_tasks: _evaluate_signing.yml

@@ -1,0 +1,24 @@
+---
+- name: "stub serving_consumer serve: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['serving_consumer:serve'] }}"
+
+# Like serving_fact.yml: adapter_ref is the guard's SERVEGUARD_ADAPTER_REF (null without the
+# supply chain). stub_digest_after_stories changes what is served once the stories ran.
+- name: "stub serving_consumer serve: publish the serving result"
+  ansible.builtin.set_fact:
+    serveguard_serving_result:
+      inference_service: serveguard-demo/serveguard-demo
+      adapter_ref: >-
+        {{ (stub_served_ref_after_stories | default(serveguard_adapter_ref)
+            if ('stories' in (stub_calls | default([]))) else stub_served_ref | default(serveguard_adapter_ref))
+           if (stub_supply_chain | default(false) | bool) else none }}
+      ready: "{{ stub_serving_ready | default(true) }}"
+      guard_exit_code: "{{ stub_guard_exit | default(0) }}"
+      annotations:
+        serveguard.dahlem.github.io/admitted: "true"
+        serveguard.dahlem.github.io/adapter-digest: >-
+          {{ (stub_digest_after_stories | default('28266fff00'))
+             if ('stories' in (stub_calls | default([]))) else '28266fff00' }}
+        serveguard.dahlem.github.io/package-root: 17a154dc00
+        serveguard.dahlem.github.io/base-hash: ecf2f3e100

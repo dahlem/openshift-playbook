@@ -1,0 +1,13 @@
+---
+- name: "pre versions: read state"
+  ansible.builtin.include_tasks: _gather_versions.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre versions: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_versions: "{{ serveguard_checks_fixtures.versions }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre versions: decide"
+  ansible.builtin.include_tasks: _evaluate_versions.yml

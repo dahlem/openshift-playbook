@@ -1,0 +1,13 @@
+{
+ "metadata": {
+  "name": "securesign",
+  "namespace": "other-team"
+ },
+ "spec": {
+  "fulcio": {
+   "config": {
+    "OIDCIssuers": []
+   }
+  }
+ }
+}

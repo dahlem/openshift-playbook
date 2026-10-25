@@ -1,0 +1,31 @@
+---
+# ServeGuard on OpenShift AI on an existing ROSA HCP cluster: the same guarded
+# steps as serveguard-demo.yml, but the cluster must already exist and be ready
+# at a supported version; it is never created.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#   ansible-playbook playbooks/serveguard-demo-on-cluster.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
+
+- name: ServeGuard demo on existing cluster (platform + demo)
+  hosts: localhost
+  vars:
+    serveguard_checks_mode: enforce
+    serveguard_cluster_must_exist: true
+  tasks:
+    - name: Require a serveguard scenario
+      ansible.builtin.assert:
+        that: serveguard_pool_name is defined and ai_platform_mode == 'standard'
+        fail_msg: "Pass a scenario: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
+
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    - name: Log in
+      ansible.builtin.include_role:
+        name: login
+
+    - name: Run the ServeGuard steps
+      ansible.builtin.include_tasks: includes/serveguard-demo-steps.yml

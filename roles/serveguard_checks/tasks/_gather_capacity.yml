@@ -1,0 +1,22 @@
+---
+- name: Read nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+  register: _sg_cap_nodes
+  when: _sg_cluster_reachable | bool
+
+- name: Read scheduled pods
+  kubernetes.core.k8s_info:
+    kind: Pod
+    field_selectors:
+      - status.phase!=Succeeded
+      - status.phase!=Failed
+  register: _sg_cap_pods
+  when: _sg_cluster_reachable | bool
+
+- name: Collect capacity facts
+  ansible.builtin.set_fact:
+    _sg_raw_capacity:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      nodes: "{{ _sg_cap_nodes.resources | default([]) }}"
+      pods: "{{ _sg_cap_pods.resources | default([]) }}"

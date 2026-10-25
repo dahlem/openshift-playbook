@@ -1,0 +1,957 @@
+---
+# Decision cases for roles/serveguard_checks, run offline on fixture JSON by
+# test_checks.yml. Each case sets _sg_raw_<step> (what the gather tasks would
+# have read), optional extra facts/vars, runs _evaluate_<step>.yml and checks:
+#   action   the decision (_sg_result.action)
+#   status   {check: status} for the rows named
+#   blocking whether any row is fail/conflict (the step would stop)
+#   detail   substrings that must appear in some row's detail
+# `workload` overrides entries of _sg_workload, which otherwise holds what
+# pre_workload read from the stub collection's role defaults.
+cases:
+  # ---- workload requests (serveguard.openshift_ai role defaults) ----------------------
+  - name: collection defaults are the requests
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_job_cpu: 500m, serveguard_job_memory: 1Gi,
+                  serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi, serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
+      overrides: {}
+    expect: { blocking: false, status: { serveguard_predictor_cpu: ok, serveguard_receiver_build_cpu: warn }, detail: ["4 (collection default)"] }
+
+  - name: a scenario override wins and is reported as passed through
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
+      overrides: { serveguard_predictor_cpu: "6" }
+    expect: { blocking: false, detail: ["6 (override; passed to the collection)"] }
+
+  - name: collection not installed -> fail with the install command
+    step: workload
+    raw: { collection: null, defaults: {}, overrides: {} }
+    expect: { blocking: true, status: { serveguard.openshift_ai: fail }, detail: ["requirements-dev.yml"] }
+
+  - name: collection without the predictor defaults -> fail
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.0.1", path: /c/serveguard/openshift_ai }
+      defaults: {}
+      overrides: {}
+    expect: { blocking: true, status: { serveguard_predictor_cpu: fail, serveguard_predictor_memory: fail, serveguard_publish_memory: fail } }
+
+  # ---- local tools -------------------------------------------------------------------
+  - name: local tools present and new enough
+    step: local
+    raw:
+      ansible_core: "2.20.3"
+      tools:
+        rosa: { rc: 0, out: "1.2.62\nYour ROSA CLI is up to date." }
+        aws: { rc: 0, out: "aws-cli/2.31.8 Python/3.13.7 Darwin/25.6.0" }
+        oc: { rc: 0, out: "Client Version: 4.20.0\nKustomize Version: v5.6.0" }
+        ocm: { rc: 0, out: "1.0.10" }
+      python_modules: { kubernetes: true, jmespath: true }
+    expect: { blocking: false, status: { rosa: ok, oc: ok, ansible_core: ok } }
+
+  - name: old oc, old ansible-core and missing ocm block
+    step: local
+    raw:
+      ansible_core: "2.14.1"
+      tools:
+        rosa: { rc: 0, out: "1.2.62" }
+        aws: { rc: 0, out: "aws-cli/2.31.8" }
+        oc: { rc: 0, out: "Client Version: 4.16.3" }
+        ocm: { rc: 127, out: "sh: ocm: command not found" }
+      python_modules: { kubernetes: false, jmespath: true }
+    expect:
+      blocking: true
+      status: { oc: fail, ocm: fail, ansible_core: fail, "python: kubernetes": fail, rosa: ok }
+      detail: ["4.16.3 < required 4.19.0", "pip install kubernetes"]
+
+  # ---- AWS account (bootstrap postcondition) --------------------------------------------
+  - name: account ready
+    step: aws
+    raw:
+      identity: "{{ fx['aws-identity'] }}"
+      rosa_logged_in: true
+      oidc_configs: "{{ fx['rosa-oidc'] }}"
+      roles: { installer: { arn: "arn:aws:iam::1:role/HCP-ROSA-Installer-Role", exists: true },
+               support: { arn: "arn:aws:iam::1:role/HCP-ROSA-Support-Role", exists: true },
+               worker: { arn: "arn:aws:iam::1:role/HCP-ROSA-Worker-Role", exists: true } }
+      elb_role: true
+      subnets: "{{ fx['aws-subnets'] }}"
+      tag_count: 12
+    expect: { blocking: false, status: { "OIDC config": ok, "IAM installer role": ok, "subnet tag headroom": ok } }
+
+  - name: empty account - missing roles, ELB role, OIDC; split VPC
+    step: aws
+    raw:
+      identity: "{{ fx['aws-identity'] }}"
+      rosa_logged_in: true
+      oidc_configs: []
+      roles: { installer: { arn: "arn:aws:iam::1:role/HCP-ROSA-Installer-Role", exists: false },
+               support: { arn: "arn:aws:iam::1:role/HCP-ROSA-Support-Role", exists: true },
+               worker: { arn: "arn:aws:iam::1:role/HCP-ROSA-Worker-Role", exists: true } }
+      elb_role: false
+      subnets: "{{ fx['aws-subnets-split-vpc'] }}"
+      tag_count: 45
+    expect:
+      blocking: true
+      status: { "OIDC config": fail, "IAM installer role": fail, "ELB service-linked role": fail,
+                "subnet pair": fail, "subnet tag headroom": fail }
+      detail: ["rosa create account-roles --mode auto --hosted-cp", "create-service-linked-role"]
+
+  - name: no AWS session
+    step: aws
+    raw: { identity: null }
+    expect: { blocking: true, status: { session: fail } }
+
+  # ---- approved SRS (local file) -------------------------------------------------------
+  - name: approved SRS present with the configured digest
+    step: srs
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: false, status: { approved SRS file: ok } }
+
+  - name: the collection's kzg19 default digest is accepted, the file still hashed
+    step: srs
+    workload: { srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    expect: { blocking: false, status: { approved digest: ok, approved SRS file: ok }, detail: ["collection default for kzg19, EZKL v23.0.5 list"] }
+
+  - name: the default digest, but the local file differs -> fail
+    step: srs
+    workload: { srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: true, status: { approved digest: ok, approved SRS file: fail } }
+
+  - name: an overriding digest is reported as an override
+    step: srs
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
+    facts: { _sg_raw_workload: { defaults: { serveguard_srs_sha256: d1a1655b4366a766d1578beb257849a92bf91cb1358c1a2c37ab180c5d3a204d } } }
+    raw: { path: /srs/other.srs, exists: true, sha256: "{{ 'ab' * 32 }}" }
+    expect: { blocking: false, detail: ["override of the collection default"] }
+
+  - name: SRS with another digest -> fail
+    step: srs
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: ~/.ezkl/srs/kzg19.srs, exists: true, sha256: "{{ 'cd' * 32 }}" }
+    expect: { blocking: true, status: { approved SRS file: fail }, detail: ["not the approved"] }
+
+  - name: SRS not supplied -> fail with how to supply it (never downloaded)
+    step: srs
+    workload: { srs_sha256: "" }
+    raw: { path: "", exists: false, sha256: "" }
+    expect: { blocking: true, status: { approved digest: fail, approved SRS file: fail }, detail: ["kzg19.srs", "never downloaded"] }
+
+  - name: SRS path missing on disk -> fail
+    step: srs
+    workload: { srs_sha256: "{{ 'ab' * 32 }}" }
+    raw: { path: /nope/kzg19.srs, exists: false, sha256: "" }
+    expect: { blocking: true, status: { approved SRS file: fail }, detail: ["/nope/kzg19.srs not found"] }
+
+  # ---- OpenShift version for a new cluster ----------------------------------------------
+  - name: guide range picks the newest enabled stable 4.20.z
+    step: versions
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] }}" }
+    expect: { blocking: false, status: { version to create: ok }, detail: ["4.20.12, the newest ROSA HCP version in 4.19.9 <= v < 4.21"] }
+
+  - name: article range (override) picks 4.22.z and warns
+    step: versions
+    vars: { serveguard_openshift_range: article }
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] }}" }
+    expect: { blocking: false, status: { version to create: ok, source: warn }, detail: ["4.22.1"] }
+
+  - name: no version in range -> fail
+    step: versions
+    raw: { cluster_exists: false, versions: "{{ fx['rosa-versions'] | selectattr('raw_id', 'match', '4\\.(18|21|22|23)') | list }}" }
+    expect: { blocking: true, status: { version to create: fail } }
+
+  - name: existing cluster -> version n/a
+    step: versions
+    raw: { cluster_exists: true, versions: null }
+    expect: { blocking: false, status: { version to create: n/a } }
+
+  # ---- receiver composition certificate -----------------------------------------------------
+  - name: no receiver required -> n/a; no anchor yet
+    step: receiver
+    raw: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: true, anchor: null }
+    expect: { blocking: false, status: { receiver: n/a, trust anchor: todo } }
+
+  - name: receiver required with the SmolLM2 descriptor
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: evidence/receiver-smollm2.json, exists: true, parse_error: "", cluster_reachable: true, anchor: null,
+           descriptor: "{{ fx['receiver-smollm2'] }}" }
+    expect: { blocking: false, status: { descriptor: ok, stories: ok, trust anchor: todo }, detail: ["+4: receiver-admitted"] }
+
+  - name: receiver required, no descriptor given -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: "", exists: false, descriptor: null, parse_error: "", cluster_reachable: false, anchor: null }
+    expect: { blocking: true, status: { descriptor: fail }, detail: ["evidence/receiver-smollm2.json"] }
+
+  - name: receiver descriptor of another schema -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: false, anchor: null, descriptor: { schema: other, detector_digest: 4444444444444444444444444444444444444444444444444444444444444444 } }
+    expect: { blocking: true, status: { descriptor: fail } }
+
+  - name: receiver descriptor not JSON -> fail
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "not a JSON object", cluster_reachable: false, anchor: null, descriptor: null }
+    expect: { blocking: true, status: { descriptor: fail }, detail: ["is not JSON"] }
+
+  - name: requiring a receiver over an anchor pinned without one -> conflict
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, base_hash: y } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["adds a receiver", "fresh approve and a new VSA"] }
+
+  - name: the same with serveguard_overrides.trust_anchor -> override
+    step: receiver
+    workload: { receiver_required: true, overrides: { trust_anchor: true } }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, base_hash: y } }
+    expect: { blocking: false, status: { trust anchor: override } }
+
+  - name: dropping the receiver from a pinned anchor -> conflict
+    step: receiver
+    raw: { path: "", exists: false, parse_error: "", cluster_reachable: true, descriptor: null,
+           anchor: { schema: x, receiver: { detector_digest: 4444444444444444444444444444444444444444444444444444444444444444 } } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["drops the receiver"] }
+
+  - name: a pinned anchor with another detector -> conflict
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: { schema: x, receiver: { detector_digest: 9999999999999999999999999999999999999999999999999999999999999999 } } }
+    expect: { blocking: true, status: { trust anchor: conflict }, detail: ["changes the detector"] }
+
+  - name: the pinned anchor already requires this receiver -> ok
+    step: receiver
+    workload: { receiver_required: true }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: true, descriptor: "{{ fx['receiver-smollm2'] }}",
+           anchor: "{{ {'schema': 'x', 'receiver': {'detector_digest': fx['receiver-smollm2'].detector_digest}} }}" }
+    expect: { blocking: false, status: { trust anchor: ok } }
+
+  - name: receiver with Kyverno -> the policy also requires SERVEGUARD_COMPOSITION_V1
+    step: receiver
+    workload: { receiver_required: true, enforcer: kyverno }
+    raw: { path: r.json, exists: true, parse_error: "", cluster_reachable: false, anchor: null, descriptor: "{{ fx['receiver-smollm2'] }}" }
+    expect: { blocking: false, status: { Kyverno: ok }, detail: ["SERVEGUARD_COMPOSITION_V1"] }
+
+  - name: caps beta and gamma from the collection
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_max_write_norm: 4.0, serveguard_max_typed_gain: 16.0 }
+      overrides: {}
+    expect: { blocking: false, status: { cap beta: ok, cap gamma: ok }, detail: ["||B_s C||_2 <= 16.0"] }
+
+  - name: a non-positive gamma -> fail
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_max_write_norm: 4.0, serveguard_max_typed_gain: 16.0 }
+      overrides: { serveguard_max_typed_gain: 0 }
+    expect: { blocking: true, status: { cap gamma: fail } }
+
+  - name: the github.com URI base (collection default) -> no placeholder warning
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair,
+                  serveguard_attestation_uri_base: "https://github.com/dahlem/serveguard/attestation" }
+      overrides: {}
+    expect: { blocking: false, status: { attestation URI base: ~ } }
+
+  # ---- supply-chain attestation (ADR-0001) ------------------------------------------------
+  - name: keypair + vap with no keys yet -> the collection generates them
+    step: signing
+    raw: { keys: {} }
+    expect: { blocking: false, status: { mode: ok, key pairs: todo }, detail: ["keypair signing, vap enforcement"] }
+
+  - name: keypair with all three pairs -> reused
+    step: signing
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.key, k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
+    expect: { blocking: false, status: { key pairs: ok } }
+
+  - name: keypair with a missing role -> the collection generates only that one
+    step: signing
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [], verifier: [k/verifier.key, k/verifier.pub] } }
+    expect: { blocking: false, status: { key pairs: todo }, detail: ["reusing operator, verifier; the collection generates publisher"] }
+
+  - name: keypair with a half pair -> conflict
+    step: signing
+    raw: { keys: { operator: [k/operator.key, k/operator.pub], publisher: [k/publisher.pub], verifier: [k/verifier.key, k/verifier.pub] } }
+    expect: { blocking: true, status: { key pairs: conflict }, detail: ["half pairs in", "publisher"] }
+
+  - name: keyless with only the operator pair -> complete (publisher/verifier use Fulcio)
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: { operator: [k/operator.key, k/operator.pub] } }
+    expect: { blocking: false, status: { key pairs: ok }, detail: ["reusing operator key pairs"] }
+
+  - name: keyless needs the operator key (it signs the trust anchor)
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: { operator: [k/operator.key] } }
+    expect: { blocking: true, status: { key pairs: conflict, trust anchor: ok } }
+
+  - name: keyless on a supported OpenShift -> ok
+    step: signing
+    workload: { signing_mode: keyless }
+    raw: { keys: {} }
+    expect: { blocking: false, status: { RHTAS on OpenShift: ok, key pairs: todo }, detail: ["4.20.12 in 4.16.0 <= v < 4.22", "operator.key/.pub"] }
+
+  - name: keyless on 4.22 (article range) -> RHTAS unsupported
+    step: signing
+    workload: { signing_mode: keyless }
+    facts: { _sg_versions: { version: "4.22.1" } }
+    raw: { keys: {} }
+    expect: { blocking: true, status: { RHTAS on OpenShift: fail } }
+
+  - name: unknown mode or enforcer -> fail
+    step: signing
+    workload: { signing_mode: gpg, enforcer: opa }
+    raw: { keys: {} }
+    expect: { blocking: true, status: { signing mode: fail, enforcer: fail } }
+
+  - name: vap enforcer -> Kyverno not needed
+    step: kyverno
+    raw: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    expect: { action: none, blocking: false, status: { Kyverno: n/a } }
+
+  - name: kyverno enforcer on a fresh cluster -> install
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: false, subscription: null, deployments: [] }
+    expect: { action: install, blocking: false, status: { Kyverno: todo } }
+
+  - name: our Kyverno, ready at 1.13, with a registry pull secret -> skip
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [sg-registry],
+           deployments: "{{ fx['kyverno-dep-ready'] | map('combine', {'spec': {'template': {'spec': {'containers': [{'name': 'kyverno', 'image': 'reg.nirmata.io/nirmata/kyverno:v1.13.4', 'args': ['--imagePullSecrets=sg-registry']}]}}}}) | list }}" }
+    expect: { action: satisfied, blocking: false, status: { version: ok, admission controller: satisfied, namespace: ok, registry credentials: ok } }
+
+  - name: Kyverno without pull credentials for the internal registry -> warn
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [], deployments: "{{ fx['kyverno-dep-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { registry credentials: warn }, detail: ["cannot fetch the VSA"] }
+
+  - name: Kyverno names a pull secret that does not exist -> fail
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", secrets: [],
+           deployments: "{{ fx['kyverno-dep-ready'] | map('combine', {'spec': {'template': {'spec': {'containers': [{'name': 'kyverno', 'image': 'k:v1.13.4', 'args': ['--imagePullSecrets=sg-registry']}]}}}}) | list }}" }
+    expect: { action: none, blocking: true, status: { registry credentials: fail } }
+
+  - name: Kyverno in another namespace than the collection grants -> conflict
+    step: kyverno
+    workload: { enforcer: kyverno, kyverno_namespace: kyverno }
+    vars: { serveguard_allow_existing_kyverno: true }
+    raw: { cluster_reachable: true, crd: true, subscription: null, secrets: [], deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: none, blocking: true, status: { namespace: conflict }, detail: ["serveguard_kyverno_namespace=kyverno-helm"] }
+
+  - name: our operator subscribed, no instance yet -> create the instance
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: false, subscription: "{{ fx['kyverno-sub'] }}", deployments: [] }
+    expect: { action: instance, blocking: false }
+
+  - name: our Kyverno not ready yet -> wait (instance step waits)
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-notready'] }}" }
+    expect: { action: instance, blocking: false, status: { admission controller: wait } }
+
+  - name: a Helm-installed Kyverno -> conflict
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: none, blocking: true, status: { existing Kyverno: conflict }, detail: ["admission controller in kyverno-helm"] }
+
+  - name: the Helm Kyverno with the override (namespace aligned) -> accepted, not subscribed
+    step: kyverno
+    workload: { enforcer: kyverno, kyverno_namespace: kyverno-helm }
+    vars: { serveguard_allow_existing_kyverno: true }
+    raw: { cluster_reachable: true, crd: true, subscription: null, deployments: "{{ fx['kyverno-dep-helm'] }}" }
+    expect: { action: accept, blocking: false, status: { existing Kyverno: override, version: ok } }
+
+  - name: Kyverno 1.11 -> fail (verifyImages attestations need 1.12)
+    step: kyverno
+    workload: { enforcer: kyverno }
+    raw: { cluster_reachable: true, crd: true, subscription: "{{ fx['kyverno-sub'] }}", deployments: "{{ fx['kyverno-dep-old'] }}" }
+    expect: { action: none, blocking: true, status: { version: fail } }
+
+  - name: keypair -> RHTAS not needed
+    step: rhtas
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
+    expect: { action: none, blocking: false, status: { RHTAS: n/a } }
+
+  - name: keyless, operator not installed yet -> create after it
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: create, blocking: false, status: { service-account issuer: ok, Securesign: todo }, detail: ["from authentication.config.openshift.io/cluster"] }
+
+  - name: keyless, Securesign trusting our issuer, all Ready -> skip
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-ours'] }}"], components: "{{ fx['rhtas-components-ready'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: satisfied, blocking: false, status: { Securesign: satisfied } }
+
+  - name: keyless, Rekor not Ready -> wait
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-ours'] }}"], components: "{{ fx['rhtas-components-partial'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: wait, blocking: false, detail: ["not Ready: Rekor"] }
+
+  - name: keyless, Securesign without the kubernetes issuer -> conflict
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-email'] }}"], components: "{{ fx['rhtas-components-ready'] }}",
+           issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: none, blocking: true, status: { Fulcio OIDC issuer: conflict } }
+
+  - name: keyless, Securesign has our issuer URL but as Type email -> conflict
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: true,
+           securesigns: ["{{ fx['securesign-ours'] | combine({'spec': {'fulcio': {'config': {'OIDCIssuers': [{'Issuer': 'https://oidc.op1.openshiftapps.com/2abc', 'IssuerURL': 'https://oidc.op1.openshiftapps.com/2abc', 'ClientID': 'sigstore', 'Type': 'email'}]}}}}) }}"],
+           components: "{{ fx['rhtas-components-ready'] }}", issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: none, blocking: true, status: { Fulcio OIDC issuer: conflict } }
+
+  - name: keyless, missing issuer added with the override -> update
+    step: rhtas
+    workload: { signing_mode: keyless }
+    vars: { serveguard_allow_securesign_update: true }
+    raw: { cluster_reachable: true, crd: true, securesigns: ["{{ fx['securesign-email'] }}", "{{ fx['securesign-other'] }}"],
+           components: "{{ fx['rhtas-components-ready'] }}", issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { action: update, blocking: false, status: { Fulcio OIDC issuer: override, other Securesign: warn } }
+
+  - name: keyless, no serviceAccountIssuer -> Kubernetes default, warned
+    step: rhtas
+    workload: { signing_mode: keyless }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "" }
+    expect: { blocking: false, status: { service-account issuer: warn }, detail: ["https://kubernetes.default.svc"] }
+
+  - name: keyless, issuer override wins over discovery
+    step: rhtas
+    workload: { signing_mode: keyless, rhtas_oidc_issuer: "https://issuer.example" }
+    raw: { cluster_reachable: true, crd: false, securesigns: [], components: {}, issuer: "https://oidc.op1.openshiftapps.com/2abc" }
+    expect: { blocking: false, detail: ["https://issuer.example (from serveguard_rhtas_oidc_issuer)"] }
+
+  - name: ClusterImagePolicy disabled -> n/a
+    step: image_policy
+    raw: { existing: null, key_exists: false, key_data: "" }
+    expect: { action: none, blocking: false, status: { ClusterImagePolicy: n/a } }
+
+  - name: ClusterImagePolicy on 4.20 with a key -> create
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: create, blocking: false, status: { OpenShift version: ok, ROSA HCP: warn } }
+
+  - name: ClusterImagePolicy on 4.19 -> fail unless Tech Preview is allowed
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    facts: { _sg_versions: { version: "4.19.20" } }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { OpenShift version: fail } }
+
+  - name: ClusterImagePolicy on 4.19 with the Tech Preview override
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub, serveguard_allow_cip_tech_preview: true }
+    facts: { _sg_versions: { version: "4.19.20" } }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: create, blocking: false, status: { OpenShift version: override } }
+
+  - name: ClusterImagePolicy with keyless -> not implemented (PublicKey only)
+    step: image_policy
+    workload: { signing_mode: keyless }
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: null, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { root of trust: fail } }
+
+  - name: an existing ClusterImagePolicy with another spec -> conflict
+    step: image_policy
+    vars: { serveguard_cluster_image_policy: true, serveguard_receiver_image_public_key: /k/receiver.pub }
+    raw: { existing: { spec: { scopes: [quay.io/other] } }, key_exists: true, key_data: "S0VZ" }
+    expect: { action: none, blocking: true, status: { serveguard-receiver: conflict } }
+
+  - name: internal registry -> referrers unverified, tag-schema fallback
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: null, referrers: null } }
+    expect: { blocking: false, status: { OCI referrers: ok }, detail: ["tag-schema fallback"] }
+
+  - name: Quay 3.13 with referrers
+    step: registry
+    workload: { registry: quay.example.com }
+    vars: { serveguard_quay: { namespace: quay, name: registry } }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: "{{ fx['quay-ok'] }}", referrers: true } }
+    expect: { blocking: false, status: { Quay version: ok, Quay referrers API: ok } }
+
+  - name: Quay 3.11 without referrers -> fail
+    step: registry
+    workload: { registry: quay.example.com }
+    vars: { serveguard_quay: { namespace: quay, name: registry } }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}", quay: { registry: "{{ fx['quay-old'] }}", referrers: false } }
+    expect: { blocking: true, status: { Quay version: fail, Quay referrers API: fail } }
+
+  - name: external registry not checked -> warn
+    step: registry
+    workload: { registry: registry.example.com, receiver_image: quay.io/me/r:1 }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null, quay: { registry: null, referrers: null } }
+    expect: { blocking: false, status: { OCI referrers: warn, internal registry: n/a } }
+
+  - name: internal registry Removed while it holds the adapters -> fail even with an external receiver image
+    step: registry
+    workload: { receiver_image: quay.io/me/r:1 }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null, quay: { registry: null, referrers: null } }
+    expect: { blocking: true, status: { managementState: fail } }
+
+  - name: attestation namespace pods are not counted as used
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-attestations'] }}" }
+    expect: { blocking: false, status: { "predictor + story Job": ok } }
+
+  - name: the same pods in another namespace do count
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-attestations'] | map('combine', {'metadata': {'namespace': 'other'}}) | list }}" }
+    expect: { blocking: true, status: { "predictor + story Job": fail } }
+
+  - name: a supply-chain collection with the placeholder URI base -> WARN
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair, serveguard_enforcer: vap,
+                  serveguard_attestation_uri_base: "https://serveguard.invalid/attestation" }
+      overrides: {}
+    expect: { blocking: false, status: { attestation URI base: warn }, detail: ["placeholder namespace"],
+              workload: { signing_mode: keypair, enforcer: vap, supply_chain: true } }
+
+  - name: an owned URI base -> no warning
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi, serveguard_signing_mode: keypair }
+      overrides: { serveguard_attestation_uri_base: "https://attest.example.org/serveguard" }
+    expect: { blocking: false, status: { attestation URI base: ~ } }
+
+  - name: a collection predating ADR-0001 -> supply_chain false
+    step: workload
+    raw:
+      collection: { name: serveguard.openshift_ai, version: "0.1.0", path: /c/serveguard/openshift_ai }
+      defaults: { serveguard_predictor_cpu: "4", serveguard_predictor_memory: 8Gi, serveguard_publish_cpu: "4", serveguard_publish_memory: 16Gi,
+                  serveguard_approve_cpu: "4", serveguard_approve_memory: 16Gi }
+      overrides: {}
+    expect: { blocking: false, workload: { supply_chain: false } }
+
+  # ---- cluster -------------------------------------------------------------------------
+  - name: cluster absent -> create at the chosen version
+    step: cluster
+    raw: { exists: false, cluster: {} }
+    expect: { action: create, blocking: false, status: { exists: todo }, detail: ["OpenShift 4.20.12"] }
+
+  - name: cluster absent on the on-cluster playbook -> fail
+    step: cluster
+    vars: { serveguard_cluster_must_exist: true }
+    raw: { exists: false, cluster: {} }
+    expect: { action: none, blocking: true, status: { exists: fail } }
+
+  - name: cluster ready at 4.20.z -> skip
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { ready: satisfied } }
+
+  - name: cluster at 4.21.3 (the Mistral pin) -> conflict under the guide range
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] | combine({'openshift_version': '4.21.3'}) }}" }
+    expect: { action: none, blocking: true, status: { version: conflict }, detail: ["serveguard_openshift_range=article"] }
+
+  - name: cluster at 4.21.3 under the article range -> skip
+    step: cluster
+    vars: { serveguard_openshift_range: article }
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-ready'] | combine({'openshift_version': '4.21.3'}) }}" }
+    expect: { action: satisfied, blocking: false }
+
+  - name: cluster installing -> wait
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-installing'] }}" }
+    expect: { action: wait, blocking: false, status: { state: wait } }
+
+  - name: cluster in error -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-error'] }}" }
+    expect: { action: none, blocking: true, status: { state: conflict } }
+
+  - name: cluster too old -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
+    expect: { action: none, blocking: true, status: { version: conflict }, detail: ["4.18.20 outside 4.19.9"] }
+
+  - name: cluster too old with override -> satisfied
+    step: cluster
+    vars: { serveguard_allow_cluster_version: true }
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-old'] }}" }
+    expect: { action: satisfied, blocking: false, status: { version: override } }
+
+  - name: classic cluster -> conflict
+    step: cluster
+    raw: { exists: true, cluster: "{{ fx['rosa-cluster-classic'] }}" }
+    expect: { action: none, blocking: true, status: { "hosted control plane": conflict } }
+
+  # ---- serving pool ---------------------------------------------------------------------
+  - name: pool absent -> create
+    step: pool
+    raw: { cluster_exists: true, exists: false, pool: {}, nodes: [] }
+    expect: { action: create, blocking: false, status: { sg-cpu: todo } }
+
+  - name: pool matches, node Ready -> skip
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-cpu'] }}", nodes: "{{ fx['nodes-cpu'][2:] }}" }
+    expect: { action: satisfied, blocking: false, status: { sg-cpu: satisfied } }
+
+  - name: pool matches, no node yet -> wait
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-cpu'] }}", nodes: [] }
+    expect: { action: wait, blocking: false, status: { sg-cpu: wait } }
+
+  - name: pool with wrong instance type -> conflict
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-wrong-type'] }}", nodes: [] }
+    expect: { action: none, blocking: true, status: { sg-cpu: conflict }, detail: ["instance type m5.xlarge != m6i.2xlarge"] }
+
+  - name: tainted pool -> conflict
+    step: pool
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-tainted'] }}", nodes: [] }
+    expect: { action: none, blocking: true, status: { sg-cpu: conflict }, detail: ["taints"] }
+
+  - name: wrong pool with override -> accept as is
+    step: pool
+    vars: { serveguard_allow_pool_mismatch: true }
+    raw: { cluster_exists: true, exists: true, pool: "{{ fx['rosa-pool-wrong-type'] }}", nodes: [] }
+    expect: { action: accept, blocking: false, status: { sg-cpu: override } }
+
+  # ---- quotas and instance types --------------------------------------------------------
+  - name: new cluster + pool fit the Standard quota
+    step: quota
+    facts: { _sg_cluster: { action: create }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, m6i.2xlarge]
+      rosa_types: [m5.2xlarge, m6i.2xlarge, g6.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: [{ type: t3.large, vcpus: 2 }]
+    expect:
+      blocking: false
+      status: { "m6i.2xlarge offered": ok, "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": ok, "m6i.2xlarge holds predictor+Job": ok,
+                "publisher prove Job fits a node": ok, "verifier approve Job fits a node": ok }
+      detail: ["16.0Gi on m5.2xlarge, m6i.2xlarge", "this run adds 24"]
+
+  - name: Standard quota too small for a new cluster
+    step: quota
+    facts: { _sg_cluster: { action: create }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, m6i.2xlarge]
+      rosa_types: [m5.2xlarge, m6i.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 16.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: []
+    expect:
+      blocking: true
+      status: { "vCPU quota Standard (A,C,D,H,I,M,R,T,Z)": fail }
+      detail: ["--quota-code L-1216C47A --desired-value 24"]
+
+  - name: GPU pool on an existing cluster needs G/VT quota (new account has 0)
+    step: quota
+    vars: { serveguard_pool_instance_type: g6.2xlarge, serveguard_accelerator: nvidia }
+    facts: { _sg_cluster: { action: satisfied }, _sg_pool: { action: create } }
+    raw:
+      az: us-east-1a
+      offered: [m5.2xlarge, g6.2xlarge]
+      rosa_types: [m5.2xlarge, g6.2xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 0.0, L-417A185B: 0.0 }
+      instances: [{ type: m5.2xlarge, vcpus: 8 }, { type: m5.2xlarge, vcpus: 8 }]
+    expect:
+      blocking: true
+      status: { "vCPU quota G and VT": fail, "g6.2xlarge offered": ok, "g6.2xlarge has a GPU": ~ }
+      detail: ["--quota-code L-DB2E81BA --desired-value 8"]
+
+  - name: GPU type not offered in the AZ, too-small serving type
+    step: quota
+    vars: { serveguard_pool_instance_type: g6.xlarge, serveguard_accelerator: nvidia }
+    facts: { _sg_cluster: { action: satisfied }, _sg_pool: { action: satisfied } }
+    raw:
+      az: us-east-1e
+      offered: [m5.2xlarge]
+      rosa_types: [m5.2xlarge, g6.xlarge]
+      specs: "{{ fx['aws-specs'] }}"
+      quotas: { L-1216C47A: 64.0, L-DB2E81BA: 32.0, L-417A185B: 0.0 }
+      instances: []
+    expect:
+      blocking: true
+      status: { "g6.xlarge offered": fail, "g6.xlarge holds predictor+Job": fail }
+
+  # ---- operators ------------------------------------------------------------------------
+  - name: fresh cluster -> install both, create OperatorGroups
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: install, blocking: false, subset: [cert_manager, rhoai], existing_operator_groups: [] }
+
+  - name: both installed on the requested channel, CSV Succeeded -> skip
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: ["{{ fx['og-rhods-ours'] | combine({'metadata': {'name': 'cert-manager-operator', 'namespace': 'cert-manager-operator'}}) }}"],
+          subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: satisfied, blocking: false, subset: [] }
+
+  - name: RHOAI installing -> wait (re-applied, no change)
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-35'] }}", other_subscriptions: [], csv: "{{ fx['csv-installing'] }}" }
+    expect: { action: install, blocking: false, subset: [rhoai] }
+
+  - name: requested channel not in the catalog -> fail before subscribing
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods-no35'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["stable-3.5 not offered by rhods-operator; available: fast-3.x, stable-3.x, stable"] }
+
+  - name: RHOAI on another channel (a Mistral install on stable) -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: none, blocking: true, detail: ["on channel stable, requested stable-3.5"] }
+
+  - name: channel change with override -> re-apply that Subscription
+    step: operators
+    vars: { serveguard_allow_channel_change: true }
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}"],
+          subscription: "{{ fx['sub-rhods-stable'] }}", other_subscriptions: [], csv: "{{ fx['csv-succeeded'] }}" }
+    expect: { action: install, blocking: false, subset: [rhoai], apply_channel_change: true }
+
+  - name: compatible foreign OperatorGroup (integration's env-up) -> adopt, no second one
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-foreign'] }}"], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: install, blocking: false, subset: [cert_manager, rhoai], existing_operator_groups: [redhat-ods-operator] }
+
+  - name: two OperatorGroups -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-ours'] }}", "{{ fx['og-rhods-foreign'] }}"],
+          subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["2 OperatorGroups in redhat-ods-operator"] }
+
+  - name: OperatorGroup with a different target mode -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: ["{{ fx['og-rhods-single-ns'] }}"], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["rhods-og targets ['redhat-ods-operator']"] }
+
+  - name: package already subscribed in another namespace -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null,
+          other_subscriptions: ["{{ fx['sub-rhods-elsewhere'] }}"], csv: null }
+    expect: { action: none, blocking: true, detail: ["openshift-operators/my-rhoai already subscribes to rhods-operator"] }
+
+  - name: CSV Failed -> conflict
+    step: operators
+    raw:
+      - { cluster_reachable: true, package: "{{ fx['pkg-certmgr'] }}", operator_groups: [], subscription: "{{ fx['sub-certmgr'] }}", other_subscriptions: [], csv: "{{ fx['csv-failed'] }}" }
+      - { cluster_reachable: true, package: "{{ fx['pkg-rhods'] }}", operator_groups: [], subscription: null, other_subscriptions: [], csv: null }
+    expect: { action: none, blocking: true, detail: ["Failed: install strategy failed"] }
+
+  # ---- DSCI / DSC ------------------------------------------------------------------------
+  - name: no DSC yet -> create
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: [], dscis: ["{{ fx['dsci-default'] }}"], kserve: null }
+    expect: { action: create, blocking: false, status: { DataScienceCluster: todo, DSCInitialization: ok } }
+
+  - name: RHOAI not installed yet (preflight) -> n/a
+    step: platform
+    facts: { _sg_operators: { subset: [rhoai] } }
+    raw: { cluster_reachable: true, dsc_crd: false, dscs: [], dscis: [], kserve: null }
+    expect: { action: create, blocking: false, status: { DataScienceCluster: n/a } }
+
+  - name: DSC as required and Ready -> skip
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-ready'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: satisfied, blocking: false, status: { DataScienceCluster: satisfied } }
+
+  - name: DSC as required, progressing -> wait
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-progressing'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: null }
+    expect: { action: wait, blocking: false, status: { DataScienceCluster: wait } }
+
+  - name: DSC with other components Managed -> conflict
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: none, blocking: true, status: { DataScienceCluster: conflict }, detail: ["dashboard Managed", "workbenches Managed"] }
+
+  - name: DSC differs with override -> update
+    step: platform
+    vars: { serveguard_allow_dsc_update: true }
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-full'] }}"], dscis: ["{{ fx['dsci-default'] }}"], kserve: "{{ fx['kserve-ready'] }}" }
+    expect: { action: update, blocking: false, status: { DataScienceCluster: override } }
+
+  - name: DSC under another name, foreign DSCI -> conflict
+    step: platform
+    facts: { _sg_operators: { subset: [] } }
+    raw: { cluster_reachable: true, dsc_crd: true, dscs: ["{{ fx['dsc-other-name'] }}"], dscis: ["{{ fx['dsci-other'] }}"], kserve: null }
+    expect: { action: none, blocking: true, status: { DSCInitialization: conflict }, detail: ["rhods exists; only one DSC per cluster"] }
+
+  # ---- GPU stack ---------------------------------------------------------------------------
+  - name: GPU allocatable and ClusterPolicy ready -> skip
+    step: gpu_stack
+    vars: { serveguard_pool_instance_type: g6.2xlarge }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu'][1:] }}", cluster_policy: { status: { state: ready } } }
+    expect: { action: satisfied, blocking: false }
+
+  - name: GPU node without driver yet -> install
+    step: gpu_stack
+    vars: { serveguard_pool_instance_type: g6.2xlarge }
+    raw: { cluster_reachable: true, nodes: "{{ [fx['nodes-gpu'][1] | combine({'status': {'allocatable': {'cpu': '7500m'}, 'conditions': [{'type': 'Ready', 'status': 'True'}]}})] }}", cluster_policy: null }
+    expect: { action: install, blocking: false }
+
+  # ---- registry, storage ---------------------------------------------------------------------
+  - name: registry Managed with storage
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-managed'] }}", deployment: "{{ fx['registry-deploy'] }}" }
+    expect: { blocking: false, status: { managementState: ok, "image-registry deployment": ok } }
+
+  - name: registry Removed (bare-metal SNO style) -> fail
+    step: registry
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
+    expect: { blocking: true, status: { managementState: fail } }
+
+  - name: internal registry not needed with an external receiver image and adapter registry
+    step: registry
+    workload: { receiver_image: "quay.io/me/serveguard-receiver:1", registry: registry.example.com }
+    raw: { cluster_reachable: true, config: "{{ fx['registry-removed'] }}", deployment: null }
+    expect: { blocking: false, status: { "internal registry": n/a } }
+
+  - name: default gp3 StorageClass
+    step: storage
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
+    expect: { blocking: false, status: { StorageClass: ok } }
+
+  - name: no default StorageClass
+    step: storage
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-no-default'] }}" }
+    expect: { blocking: true, status: { StorageClass: fail }, detail: ["no default StorageClass"] }
+
+  - name: ReadWriteMany (collection setting) on EBS -> fail
+    step: storage
+    workload: { store_access_mode: ReadWriteMany }
+    raw: { cluster_reachable: true, storage_classes: "{{ fx['sc-gp3-default'] }}" }
+    expect: { blocking: true, status: { StorageClass: fail }, detail: ["cannot provide ReadWriteMany"] }
+
+  # ---- capacity --------------------------------------------------------------------------------
+  - name: CPU demo fits; the demo's own old predictor is not counted
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect:
+      blocking: false
+      status: { "schedulable nodes": ok, "receiver build": ok, "predictor (+guard init)": ok, "predictor + story Job": ok }
+      detail: ["fits on ip-10-0-1-3"]
+
+  - name: publish (4 CPU / 16Gi + 16Gi proving-key volume) fits a worker
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: false, status: { "publisher prove Job": ok, "verifier approve Job": ok, "verifier admit Job": ok }, detail: ["4 CPU / 16.0Gi / 16.0Gi ephemeral fits"] }
+
+  - name: publish with more memory than any node has free -> fail
+    step: capacity
+    workload: { publish_memory: 40Gi }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: true, status: { "publisher prove Job": fail, "verifier approve Job": ok } }
+
+  - name: pods of all three trust domains are not counted as used
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-trust-domains'] }}" }
+    expect: { blocking: false, status: { "predictor + story Job": ok, "publisher prove Job": ok } }
+
+  - name: busy cluster -> predictor does not fit
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-busy'] }}" }
+    expect:
+      blocking: true
+      status: { "receiver build": ok, "predictor (+guard init)": fail, "predictor + story Job": fail }
+      detail: ["no schedulable node has 4 CPU / 8.0Gi / 30.0Gi ephemeral free"]
+
+  - name: a pod's init container counts as its request (max of init, sum of main)
+    step: capacity
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-init'] }}" }
+    expect: { blocking: true, status: { "predictor (+guard init)": ok, "predictor + story Job": fail }, detail: ["fits on ip-10-0-1-3 (free 4 CPU"] }
+
+  - name: 4 vCPU workers, serving pool still to be created -> n/a, not fail
+    step: capacity
+    facts: { _sg_pool: { action: create } }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
+    expect: { blocking: false, status: { "predictor (+guard init)": n/a, "tools Job": ok } }
+
+  - name: 4 vCPU workers cannot hold a 4 CPU predictor
+    step: capacity
+    facts: { _sg_pool: { action: satisfied } }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-small'] }}", pods: [] }
+    expect: { blocking: true, status: { "predictor (+guard init)": fail } }
+
+  - name: bigger predictor (override of the collection default) no longer fits
+    step: capacity
+    workload: { predictor_cpu: "7", predictor_memory: 24Gi }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-cpu'] }}", pods: "{{ fx['pods-light'] }}" }
+    expect: { blocking: true, status: { "predictor + story Job": fail }, detail: ["no schedulable node has 7.5 CPU / 25.0Gi"] }
+
+  - name: GPU node tainted -> GPU predictor cannot schedule
+    step: capacity
+    vars: { serveguard_accelerator: nvidia }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu-tainted'] }}", pods: [] }
+    expect: { blocking: true, status: { "predictor (+guard init)": fail }, detail: ["/ 1 GPU"] }
+
+  - name: GPU node untainted -> GPU predictor fits
+    step: capacity
+    vars: { serveguard_accelerator: nvidia }
+    raw: { cluster_reachable: true, nodes: "{{ fx['nodes-gpu'] }}", pods: [] }
+    expect: { blocking: false, status: { "predictor (+guard init)": ok }, detail: ["fits on ip-10-0-2-1"] }

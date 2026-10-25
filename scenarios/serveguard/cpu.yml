@@ -1,0 +1,20 @@
+---
+# ServeGuard OpenShift AI demo — CPU serving (default).
+#
+# RHOAI 3.x with only KServe in standard (RawDeployment) mode; cert-manager is the
+# only operator dependency. vLLM runs the Red Hat AI Inference x86_64 CPU image as
+# a custom ServingRuntime on a dedicated 8 vCPU / 32 GiB pool (the predictor
+# requests 4 vCPU / 8 GiB). No Serverless, Service Mesh, NFD or GPU operator.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#   ... -e rhoai_channel=stable-3.6        # once RHOAI 3.6 is GA (see docs/serveguard.md)
+
+operators_enabled: [cert_manager, rhoai]
+rhoai_channel: "{{ versions.serveguard.rhoai_channel }}"
+ai_platform_mode: standard
+
+serveguard_accelerator: cpu
+serveguard_pool_name: sg-cpu
+serveguard_pool_instance_type: "{{ versions.serveguard.cpu_instance_type }}"
+serveguard_vllm_image: "{{ versions.serveguard.vllm_cpu_image }}"

@@ -1,0 +1,37 @@
+---
+# ai_platform_mode (inventory config.yml) selects the DataScienceCluster shape:
+#   serverless — DSC/DSCI v1, KServe on Knative + Service Mesh (Mistral scenarios)
+#   standard   — DSC v2, KServe standard (RawDeployment) only; cert-manager is the
+#                only dependency (RHOAI 3.x). No Knative, no Service Mesh.
+ai_platform_api_versions:
+  serverless: { dsci: v1, dsc: v1 }
+  standard: { dsci: v2, dsc: v2 }
+
+# standard mode: the kserve component, and every other DSC v2 component set
+# Removed (component names from the opendatahub-operator v3.5.0 and v3.6.0-ea.2
+# DataScienceCluster v2 API). Override if a release drops or adds a component.
+ai_platform_standard_kserve:
+  managementState: Managed
+  nim: { managementState: Removed }   # NIM defaults to Managed and calls NVIDIA's API
+ai_platform_standard_removed:
+  - aigateway
+  - aipipelines
+  - dashboard
+  - feastoperator
+  - kueue
+  - llamastackoperator
+  - mcplifecycleoperator
+  - mlflowoperator
+  - modelregistry
+  - ogx
+  - ray
+  - sparkoperator
+  - trainer
+  - trainingoperator
+  - trustyai
+  - workbenches
+# Created only if the operator has not created default-dsci itself.
+ai_platform_standard_dsci_spec:
+  applicationsNamespace: redhat-ods-applications
+  monitoring: { managementState: Removed, namespace: redhat-ods-monitoring }
+  trustedCABundle: { managementState: Managed, customCABundle: "" }

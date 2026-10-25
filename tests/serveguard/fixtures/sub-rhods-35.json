@@ -1,0 +1,14 @@
+{
+ "metadata": {
+  "namespace": "redhat-ods-operator",
+  "name": "rhods-operator"
+ },
+ "spec": {
+  "name": "rhods-operator",
+  "channel": "stable-3.5",
+  "source": "redhat-operators"
+ },
+ "status": {
+  "installedCSV": "rhods-operator.3.5.1"
+ }
+}

@@ -1,0 +1,63 @@
+---
+# Read-only: per enabled operator, its catalog entry, the OperatorGroups in its
+# namespace, its Subscription and CSV, and Subscriptions to the same package elsewhere.
+
+- name: Read operator catalog entries
+  kubernetes.core.k8s_info:
+    api_version: packages.operators.coreos.com/v1
+    kind: PackageManifest
+    namespace: openshift-marketplace
+    name: "{{ item.package }}"
+  register: _sg_op_pkgs
+  loop: "{{ _sg_operator_reqs }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: _sg_cluster_reachable | bool
+
+- name: Read OperatorGroups
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1
+    kind: OperatorGroup
+    namespace: "{{ item.namespace }}"
+  register: _sg_op_ogs
+  loop: "{{ _sg_operator_reqs }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: _sg_cluster_reachable | bool
+
+- name: Read all Subscriptions
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+  register: _sg_op_subs
+  when: _sg_cluster_reachable | bool
+
+- name: Read installed CSVs
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: "{{ item.namespace }}"
+    name: "{{ _sg_installed_csv }}"
+  register: _sg_op_csvs
+  loop: "{{ _sg_operator_reqs }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _sg_installed_csv: >-
+      {{ (_sg_op_subs.resources | default([])
+          | selectattr('metadata.namespace', 'equalto', item.namespace)
+          | selectattr('metadata.name', 'equalto', item.sub_name)
+          | map(attribute='status') | map(attribute='installedCSV', default='') | first | default('')) }}
+  when:
+    - _sg_cluster_reachable | bool
+    - _sg_installed_csv | length > 0
+
+- name: Collect operator facts
+  ansible.builtin.set_fact:
+    _sg_raw_operators: >-
+      {{ _sg_operator_reqs | sg_operator_raw(
+           _sg_cluster_reachable | bool,
+           _sg_op_pkgs.results | default([]),
+           _sg_op_ogs.results | default([]),
+           _sg_op_subs.resources | default([]),
+           _sg_op_csvs.results | default([])) }}

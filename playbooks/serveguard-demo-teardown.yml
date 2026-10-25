@@ -1,0 +1,132 @@
+---
+# Tear down the ServeGuard demo in reverse dependency order.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo-teardown.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#   ... -e teardown_platform=false     # keep RHOAI/cert-manager and the serving pool; demo only
+#   ... -e teardown_cluster=true       # also delete the ROSA cluster
+
+- name: Tear down ServeGuard demo
+  hosts: localhost
+  pre_tasks:
+    - name: Require a serveguard scenario
+      ansible.builtin.assert:
+        that: serveguard_pool_name is defined and ai_platform_mode == 'standard'
+        fail_msg: "Pass the scenario you deployed: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
+  roles:
+    - role: login
+  tasks:
+    - name: Remove the ServeGuard workload (the trust domains, attestations and the admission policy)
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.teardown
+
+    - name: Read the workload namespaces from the collection
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+      vars:
+        serveguard_checks_mode: report
+
+    # serveguard.openshift_ai.teardown (main 938fca35) removes the three trust-domain
+    # namespaces and the VAP, but not the attestation namespace nor the Kyverno
+    # ClusterPolicy it renders for enforcer kyverno. Remove exactly those two, by name.
+    - name: Remove the attestation namespace the collection's teardown leaves
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ _sg_workload.attestation_namespace | default('sg-attestations') }}"
+        wait: true
+        wait_timeout: 600
+
+    - name: Remove the collection's Kyverno ClusterPolicy (enforcer kyverno)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: kyverno.io/v1
+        kind: ClusterPolicy
+        name: "serveguard-require-vsa-{{ _sg_workload.namespace | default('serveguard-demo') }}"
+      register: _sg_td_kp
+      failed_when: _sg_td_kp.failed and 'not find' not in (_sg_td_kp.msg | default('')) and 'CRD' not in (_sg_td_kp.msg | default(''))
+      when: (_sg_workload.enforcer | default('vap')) == 'kyverno'
+
+    - name: Verify the trust-domain namespaces are gone
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+      register: _sg_td_ns
+      loop:
+        - "{{ _sg_workload.namespace | default('serveguard-demo') }}"
+        - "{{ _sg_workload.publisher_namespace | default('sg-publisher') }}"
+        - "{{ _sg_workload.verifier_namespace | default('sg-verifier') }}"
+        - "{{ _sg_workload.attestation_namespace | default('sg-attestations') }}"
+
+    - name: Verify the admission policy and binding are gone
+      kubernetes.core.k8s_info:
+        api_version: admissionregistration.k8s.io/v1
+        kind: "{{ item }}"
+        name: "serveguard-admitted-adapters-{{ _sg_workload.namespace | default('serveguard-demo') }}"
+      register: _sg_td_vap
+      loop: [ValidatingAdmissionPolicy, ValidatingAdmissionPolicyBinding]
+
+    - name: Verify the Kyverno ClusterPolicy is gone (enforcer kyverno)
+      kubernetes.core.k8s_info:
+        api_version: kyverno.io/v1
+        kind: ClusterPolicy
+        name: "serveguard-require-vsa-{{ _sg_workload.namespace | default('serveguard-demo') }}"
+      register: _sg_td_kpol
+      failed_when: false
+      when: (_sg_workload.enforcer | default('vap')) == 'kyverno'
+
+    - name: Assert the workload is removed before the platform goes
+      ansible.builtin.assert:
+        that:
+          - _sg_td_ns.results | map(attribute='resources') | flatten | length == 0
+          - _sg_td_vap.results | map(attribute='resources') | flatten | length == 0
+          - _sg_td_kpol.resources | default([]) | length == 0
+        fail_msg: >-
+          Still present: {{ (_sg_td_ns.results + _sg_td_vap.results) | selectattr('resources')
+          | map(attribute='item') | join(', ') }}. Re-run the teardown; the platform was not touched.
+
+    - name: Remove the platform and the serving pool
+      when: teardown_platform | default(true) | bool
+      block:
+        - name: Remove AI platform
+          ansible.builtin.include_role:
+            name: ai_platform
+            tasks_from: teardown
+
+        - name: Remove GPU stack
+          ansible.builtin.include_role:
+            name: gpu_stack
+            tasks_from: teardown
+          when: serveguard_accelerator == 'nvidia'
+
+        - name: Remove the supply-chain prerequisites this playbook created
+          ansible.builtin.include_role:
+            name: supply_chain
+            tasks_from: teardown
+
+        # RHTAS lives in openshift-operators with other operators: supply_chain's teardown
+        # removes only its Subscription and installed CSV, never `--all` CSVs there.
+        - name: Remove operators (incl. Kyverno when the mode installed it)
+          ansible.builtin.include_role:
+            name: operators
+            tasks_from: teardown
+          vars:
+            operators_subset: >-
+              {{ operators_enabled
+                 + (['kyverno'] if ((_sg_workload.enforcer | default('vap')) == 'kyverno'
+                                   and not (serveguard_allow_existing_kyverno | bool)) else []) }}
+
+        - name: Remove the serving pool
+          ansible.builtin.include_role:
+            name: gpu_machinepool
+            tasks_from: teardown
+          vars:
+            gpu_pool_name: "{{ serveguard_pool_name }}"
+            gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+
+    - name: Remove ROSA cluster
+      ansible.builtin.include_role:
+        name: rosa_cluster
+        tasks_from: teardown
+      when: teardown_cluster | default(false) | bool

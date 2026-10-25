@@ -1,0 +1,32 @@
+{
+ "m5.2xlarge": {
+  "type": "m5.2xlarge",
+  "vcpus": 8,
+  "memory_mib": 32768,
+  "gpus": null
+ },
+ "m6i.2xlarge": {
+  "type": "m6i.2xlarge",
+  "vcpus": 8,
+  "memory_mib": 32768,
+  "gpus": null
+ },
+ "m6i.large": {
+  "type": "m6i.large",
+  "vcpus": 2,
+  "memory_mib": 8192,
+  "gpus": null
+ },
+ "g6.xlarge": {
+  "type": "g6.xlarge",
+  "vcpus": 4,
+  "memory_mib": 16384,
+  "gpus": 1
+ },
+ "g6.2xlarge": {
+  "type": "g6.2xlarge",
+  "vcpus": 8,
+  "memory_mib": 32768,
+  "gpus": 1
+ }
+}

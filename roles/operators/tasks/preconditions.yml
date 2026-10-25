@@ -7,6 +7,9 @@
     name: versions
   when: versions is not defined
 
+- name: Resolve enabled operators
+  ansible.builtin.include_tasks: _resolve.yml
+
 - name: Verify oc login
   ansible.builtin.command: oc whoami
   register: _oc_whoami
@@ -35,9 +38,9 @@
     api_version: packages.operators.coreos.com/v1
     kind: PackageManifest
     namespace: openshift-marketplace
-    name: "{{ item.value.package }}"
+    name: "{{ item.package }}"
   register: _pkg_results
-  loop: "{{ versions.operators | dict2items }}"
+  loop: "{{ _operators }}"
   loop_control:
     label: "{{ item.key }}"
 
@@ -45,8 +48,8 @@
   ansible.builtin.assert:
     that: item.resources | length > 0
     fail_msg: >-
-      Operator '{{ item.item.key }}' (package={{ item.item.value.package }})
-      not found in catalog {{ item.item.value.source }}.
+      Operator '{{ item.item.key }}' (package={{ item.item.package }})
+      not found in catalog {{ item.item.source }}.
   loop: "{{ _pkg_results.results }}"
   loop_control:
     label: "{{ item.item.key }}"
@@ -55,17 +58,12 @@
   kubernetes.core.k8s_info:
     api_version: operators.coreos.com/v1alpha1
     kind: Subscription
-    name: "{{ item.name }}"
-    namespace: "{{ item.namespace }}"
+    name: "{{ item.subscription.name }}"
+    namespace: "{{ item.subscription.namespace }}"
   register: _pre_sub_results
-  loop:
-    - { name: nfd, namespace: openshift-nfd }
-    - { name: gpu-operator-certified, namespace: nvidia-gpu-operator }
-    - { name: serverless-operator, namespace: openshift-serverless }
-    - { name: servicemeshoperator, namespace: openshift-operators }
-    - { name: rhods-operator, namespace: redhat-ods-operator }
+  loop: "{{ _operators }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.subscription.name }}"
 
 - name: Check if required CRDs already exist
   kubernetes.core.k8s_info:
@@ -73,11 +71,21 @@
     kind: CustomResourceDefinition
     name: "{{ item }}"
   register: _pre_crd_results
-  loop:
-    - nodefeaturediscoveries.nfd.openshift.io
-    - clusterpolicies.nvidia.com
-    - dscinitializations.dscinitialization.opendatahub.io
-    - datascienceclusters.datasciencecluster.opendatahub.io
+  loop: "{{ _operators | map(attribute='crds') | flatten | map(attribute='crd') | list }}"
+
+- name: Reset subscription channel drift
+  ansible.builtin.set_fact:
+    _channel_drift: []
+
+- name: Find subscriptions on a different channel than requested
+  ansible.builtin.set_fact:
+    _channel_drift: "{{ _channel_drift + [item.item.subscription.name] }}"
+  loop: "{{ _pre_sub_results.results | selectattr('resources', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item.subscription.name }}"
+  when:
+    - item.resources | length > 0
+    - item.resources[0].spec.channel | default('') != item.item.channel
 
 - name: Determine if deploy is needed
   ansible.builtin.set_fact:
@@ -86,8 +94,16 @@
         (_pre_sub_results.results | selectattr('resources', 'defined')
          | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0) and
         (_pre_crd_results.results | selectattr('resources', 'defined')
-         | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0)
+         | map(attribute='resources') | map('length') | select('equalto', 0) | list | length == 0) and
+        (_channel_drift | length == 0 or not (operators_apply_channel_change | default(false) | bool))
       ) }}
+
+- name: "operators: subscription channel changed"
+  ansible.builtin.debug:
+    msg: "Subscriptions {{ _channel_drift | join(', ') }} will move to the requested channel."
+  when:
+    - _channel_drift | length > 0
+    - operators_apply_channel_change | default(false) | bool
 
 - name: "operators: already complete, skipping deploy."
   ansible.builtin.debug:
@@ -96,5 +112,5 @@
 
 - name: "operators preconditions: PASSED"
   ansible.builtin.debug:
-    msg: "Cluster accessible, all {{ versions.operators | length }} operator packages available in catalog."
+    msg: "Cluster accessible, all {{ _operators | length }} operator packages available in catalog."
   when: _deploy_needed | bool

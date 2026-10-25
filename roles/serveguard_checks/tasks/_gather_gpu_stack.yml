@@ -1,0 +1,24 @@
+---
+- name: Read GPU nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ serveguard_pool_instance_type }}"
+  register: _sg_gpu_nodes
+  when: _sg_cluster_reachable | bool
+
+- name: Read the ClusterPolicy
+  kubernetes.core.k8s_info:
+    api_version: nvidia.com/v1
+    kind: ClusterPolicy
+    name: gpu-cluster-policy
+  register: _sg_gpu_policy
+  failed_when: false
+  when: _sg_cluster_reachable | bool
+
+- name: Collect GPU stack facts
+  ansible.builtin.set_fact:
+    _sg_raw_gpu_stack:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      nodes: "{{ _sg_gpu_nodes.resources | default([]) }}"
+      cluster_policy: "{{ _sg_gpu_policy.resources | default([]) | first | default(none) }}"

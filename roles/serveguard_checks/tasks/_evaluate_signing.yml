@@ -1,0 +1,15 @@
+---
+- name: Evaluate the signing mode
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_signing | sg_eval_signing({
+           'mode': _sg_workload.signing_mode | default('keypair'),
+           'enforcer': _sg_workload.enforcer | default('vap'),
+           'keys_dir': _sg_workload.signing_keys_dir | default(''),
+           'openshift_version': _sg_cluster.version | default(none) if (_sg_cluster.version | default('unknown')) != 'unknown'
+                                else (_sg_versions.version | default(none)),
+           'rhtas_min': versions.serveguard.requirements.rhtas_openshift.min,
+           'rhtas_max_exclusive': versions.serveguard.requirements.rhtas_openshift.max_exclusive }) }}
+
+- name: Record signing checks
+  ansible.builtin.include_tasks: _record.yml

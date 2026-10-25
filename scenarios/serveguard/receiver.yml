@@ -1,0 +1,15 @@
+---
+# ServeGuard: require the receiver composition certificate. Compose AFTER cpu.yml or
+# gpu.yml (and after a supply-chain mode file, if any):
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml \
+#     -e @scenarios/serveguard/receiver.yml --ask-vault-pass
+#
+# The anchor then pins the descriptor's detector digest, tau and per-layer bound ceilings,
+# so its digest changes: an anchor pinned without a receiver is a CONFLICT in the
+# preflight unless serveguard_overrides.trust_anchor is set, and a fresh approve and a
+# new VSA follow. Every publication certifies its composition, the VSA gains
+# SERVEGUARD_COMPOSITION_V1 (Kyverno then requires it too), the guard re-checks every
+# witness, and the stories role runs the four receiver stories.
+# The descriptor below is the one fitted for the default SmolLM2 model and policy.
+serveguard_receiver_required: true
+serveguard_receiver_descriptor: "{{ serveguard_repo_dir }}/integrations/openshift-ai/evidence/receiver-smollm2.json"

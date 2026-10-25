@@ -1,0 +1,14 @@
+---
+# ServeGuard supply-chain mode: keyless signing (RHTAS) + VAP enforcement.
+# Compose AFTER cpu.yml or gpu.yml:
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml \
+#     -e @scenarios/serveguard/keyless.yml --ask-vault-pass
+#
+# Installs the RHTAS operator (1.3.x) and a Securesign whose Fulcio trusts the
+# cluster's service-account issuer (Type kubernetes); exports its ClientTrustConfig
+# for the collection. Publisher and verifier then sign as their own service accounts;
+# the operator still signs the trust anchor with operator.key (never leaves the controller).
+# RHTAS 1.3 supports OpenShift 4.16-4.21 (the default 4.20.z range is inside).
+# Without this file: keypair signing + VAP, which needs no extra operator.
+serveguard_signing_mode: keyless
+serveguard_enforcer: vap

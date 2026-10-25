@@ -1,0 +1,180 @@
+---
+# The guarded ServeGuard steps, shared by serveguard-demo.yml and
+# serveguard-demo-on-cluster.yml. Platform steps: pre (decide) -> role (only when
+# needed) -> post (verify). The workload is the serveguard.openshift_ai collection
+# (serveguard-demo-workload.yml), which guards its own steps.
+
+# ---- local tools, workload requests, AWS account, cluster, pool, quotas -------------
+- name: Check local tools
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_local }
+
+- name: Read the workload requests from the serveguard collection
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_workload }
+
+- name: Check the approved SRS file (local, never downloaded)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_srs }
+
+- name: Check the AWS account (bootstrap output)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_aws }
+
+- name: Check the cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_cluster }
+
+- name: Pick the OpenShift version for a new cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_versions }
+
+- name: Re-check the cluster with that version
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_cluster }
+
+- name: Check the serving pool
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_pool }
+
+- name: Check quotas, instance types and the serving node size
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_quota }
+
+- name: Create or wait for the cluster
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_openshift_version: "{{ _sg_versions.version | default(_sg_cluster.version, true) }}"
+  when: _sg_cluster.action in ['create', 'wait']
+
+- name: Log in to the cluster
+  ansible.builtin.include_role:
+    name: login
+  when: _sg_cluster.action in ['create', 'wait'] or not (_sg_cluster_reachable | bool)
+
+- name: Verify the cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_cluster }
+
+- name: Grant OCM access
+  ansible.builtin.include_role:
+    name: cluster_access
+
+- name: Re-check the serving pool against the live cluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_pool }
+
+- name: Create or wait for the serving pool
+  ansible.builtin.include_role:
+    name: gpu_machinepool
+  vars:
+    gpu_pool_name: "{{ serveguard_pool_name }}"
+    gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+    gpu_pool_taint: ""
+  when: _sg_pool.action in ['create', 'wait']
+
+- name: Verify the serving pool
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_pool }
+
+# ---- operators, GPU stack, platform -------------------------------------------------
+- name: Check the signing mode and enforcer (ADR-0001)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_signing }
+
+- name: Check Kyverno (enforcer kyverno only)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+
+- name: Check the operators (incl. RHTAS / Kyverno when the mode needs them)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_operators }
+
+- name: Install the missing operators
+  ansible.builtin.include_role:
+    name: operators
+  vars:
+    operators_subset: "{{ _sg_operators.subset }}"
+    operators_existing_operator_groups: "{{ _sg_operators.existing_operator_groups }}"
+    operators_apply_channel_change: "{{ _sg_operators.apply_channel_change }}"
+  when: _sg_operators.subset | length > 0
+
+- name: Verify the operators
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_operators }
+
+- name: GPU stack
+  when: serveguard_accelerator == 'nvidia'
+  block:
+    - name: Check the GPU stack
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_gpu_stack }
+
+    - name: Configure the GPU stack
+      ansible.builtin.include_role:
+        name: gpu_stack
+      vars:
+        gpu_instance_type: "{{ serveguard_pool_instance_type }}"
+      when: _sg_gpu_stack.action == 'install'
+
+    - name: Verify the GPU stack
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_gpu_stack }
+
+- name: Check the DataScienceCluster
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_platform }
+
+- name: Create or update the DataScienceCluster
+  ansible.builtin.include_role:
+    name: ai_platform
+  when: _sg_platform.action in ['create', 'wait', 'update']
+
+- name: Verify the platform
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: post_platform }
+
+# ---- platform checks for the workload, then the workload ---------------------------
+- name: Supply-chain prerequisites
+  block:
+    - name: Re-check Kyverno after the operators
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+
+    - name: Kyverno instance and readiness
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: kyverno }
+      when: _sg_kyverno.action in ['install', 'instance']
+
+    - name: Verify Kyverno
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_kyverno }
+      when: _sg_kyverno.action != 'none'
+      vars:
+        serveguard_checks_mode: enforce
+
+    - name: Kyverno is satisfied
+      ansible.builtin.assert:
+        that: _sg_kyverno.action in ['none', 'satisfied', 'accept']
+        fail_msg: "Kyverno: {{ _sg_kyverno.rows | map(attribute='detail') | join('; ') }}"
+
+    - name: Check RHTAS (keyless only)
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_rhtas }
+
+    - name: RHTAS Securesign and trust config
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: rhtas }
+      when: _sg_rhtas.action in ['create', 'update', 'wait', 'satisfied']
+
+    - name: Verify RHTAS
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_rhtas }
+      when: _sg_rhtas.action != 'none'
+
+    - name: RHTAS is satisfied
+      ansible.builtin.assert:
+        that:
+          - _sg_rhtas.action in ['none', 'satisfied']
+          - _sg_rhtas.action == 'none' or (serveguard_rhtas_trust_config | default('')) is file
+        fail_msg: "RHTAS: {{ _sg_rhtas.rows | map(attribute='detail') | join('; ') }}"
+
+    - name: Check the ClusterImagePolicy (opt-in)
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_image_policy }
+
+    - name: Apply the ClusterImagePolicy
+      ansible.builtin.include_role: { name: supply_chain, tasks_from: image_policy }
+      when: _sg_image_policy.action in ['create', 'satisfied']
+
+- name: Check the receiver composition certificate and the pinned trust anchor
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_receiver }
+
+- name: Check the internal image registry (and Quay, if configured)
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_registry }
+
+- name: Check storage
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_storage }
+
+- name: Check cluster capacity for the demo
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: pre_capacity }
+
+- name: Run the ServeGuard workload (serveguard.openshift_ai)
+  ansible.builtin.include_tasks: serveguard-demo-workload.yml
+
+- name: Summary of all checks
+  ansible.builtin.include_role: { name: serveguard_checks, tasks_from: report }

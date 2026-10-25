@@ -1,0 +1,12 @@
+{
+ "metadata": {
+  "name": "registry",
+  "namespace": "quay"
+ },
+ "spec": {
+  "configBundleSecret": "cfg"
+ },
+ "status": {
+  "currentVersion": "3.11.6"
+ }
+}

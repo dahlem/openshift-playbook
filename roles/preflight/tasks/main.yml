@@ -34,4 +34,4 @@
       Cluster:    {{ rosa_cluster_name }} ({{ _cluster_version | default('pending creation') }})
       GPU type:   {{ versions.infrastructure.gpu_instance_type }}
       Subnet:     {{ rosa_private_subnet }} ({{ _subnet_tag_count }} / 50 tags, {{ 50 - _subnet_tag_count }} headroom)
-      Operators:  {{ versions.operators | dict2items | map(attribute='key') | join(', ') }}
+      Operators:  {{ operators_enabled | join(', ') }}

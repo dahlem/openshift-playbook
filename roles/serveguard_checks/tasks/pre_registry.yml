@@ -1,0 +1,13 @@
+---
+- name: "pre registry: read state"
+  ansible.builtin.include_tasks: _gather_registry.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre registry: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_registry: "{{ serveguard_checks_fixtures.registry }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre registry: decide"
+  ansible.builtin.include_tasks: _evaluate_registry.yml

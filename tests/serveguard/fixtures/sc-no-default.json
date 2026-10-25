@@ -1,0 +1,8 @@
+[
+ {
+  "metadata": {
+   "name": "gp3-csi"
+  },
+  "provisioner": "ebs.csi.aws.com"
+ }
+]

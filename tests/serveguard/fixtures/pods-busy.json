@@ -1,0 +1,71 @@
+[
+ {
+  "metadata": {
+   "namespace": "openshift-monitoring",
+   "name": "prometheus-0"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-1",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "8Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "openshift-monitoring",
+   "name": "prometheus-1"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-2",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "8Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ },
+ {
+  "metadata": {
+   "namespace": "other-team",
+   "name": "batch"
+  },
+  "spec": {
+   "nodeName": "ip-10-0-1-3",
+   "containers": [
+    {
+     "name": "c",
+     "resources": {
+      "requests": {
+       "cpu": "4",
+       "memory": "8Gi"
+      }
+     }
+    }
+   ]
+  },
+  "status": {
+   "phase": "Running"
+  }
+ }
+]

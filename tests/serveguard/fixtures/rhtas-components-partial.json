@@ -1,0 +1,81 @@
+{
+ "Fulcio": [
+  {
+   "metadata": {
+    "name": "fulcio"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "url": "https://fulcio.apps.example"
+   }
+  }
+ ],
+ "CTlog": [
+  {
+   "metadata": {
+    "name": "ctlog"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "url": "https://ctlog.apps.example"
+   }
+  }
+ ],
+ "Trillian": [
+  {
+   "metadata": {
+    "name": "trillian"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "url": "https://trillian.apps.example"
+   }
+  }
+ ],
+ "Tuf": [
+  {
+   "metadata": {
+    "name": "tuf"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "url": "https://tuf.apps.example"
+   }
+  }
+ ],
+ "Rekor": [
+  {
+   "metadata": {
+    "name": "rekor"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False"
+     }
+    ]
+   }
+  }
+ ]
+}

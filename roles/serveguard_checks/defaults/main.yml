@@ -1,0 +1,27 @@
+---
+# Pre- and postconditions for the ServeGuard demo playbooks.
+#
+# Each step has tasks/pre_<step>.yml and (where something is created)
+# tasks/post_<step>.yml. A pre file reads the current state (_gather_<step>.yml,
+# read-only), decides (_evaluate_<step>.yml -> filter_plugins/serveguard_checks.py)
+# and records rows in _sg_checks. The decision is in _sg_<step>.action:
+#   create | wait | install | update | deploy  -> run the step
+#   satisfied                                  -> skip the step ("already satisfied")
+#   accept                                     -> skip the step (conflict accepted by override)
+#   none                                       -> nothing to run (pure check) or blocked
+#
+# enforce: fail at the first step with a conflict/fail row (deploy playbooks)
+# report:  record everything, print the table at the end (serveguard-demo-preflight.yml)
+serveguard_checks_mode: enforce
+
+# Bounded waits in the postconditions (seconds)
+serveguard_wait_cluster: "{{ cluster_wait_timeout }}"
+serveguard_wait_node: "{{ node_wait_timeout }}"
+serveguard_wait_operator: "{{ crd_wait_timeout }}"
+serveguard_wait_platform: 1200
+serveguard_wait_gpu: 1200
+
+# Workers of a cluster this run would create (rosa create cluster default for HCP)
+serveguard_cluster_workers: 2
+# serveguard-demo-on-cluster.yml sets this: the cluster must already exist.
+serveguard_cluster_must_exist: false

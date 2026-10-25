@@ -1,0 +1,17 @@
+{
+ "metadata": {
+  "name": "openshift-cert-manager-operator"
+ },
+ "status": {
+  "channels": [
+   {
+    "name": "stable-v1",
+    "currentCSV": "openshift-cert-manager-operator.v1"
+   },
+   {
+    "name": "stable-v1.15",
+    "currentCSV": "openshift-cert-manager-operator.v1"
+   }
+  ]
+ }
+}

@@ -1,0 +1,45 @@
+---
+# Nodes this run adds: the cluster's workers if the cluster is new, the serving
+# pool if the pool is new. The serving node must hold the predictor and one
+# co-located Job (the store is ReadWriteOnce).
+- name: Evaluate quotas and instance types
+  when: _sg_workload.predictor_cpu is defined and _sg_workload.predictor_memory is defined
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_quota | sg_eval_quota({
+           'nodes': [{'type': versions.infrastructure.compute_instance_type},
+                     {'type': serveguard_pool_instance_type}],
+           'new_nodes': ([{'type': versions.infrastructure.compute_instance_type,
+                           'count': serveguard_cluster_workers | int}]
+                         if _sg_cluster.action == 'create' else [])
+                        + ([{'type': serveguard_pool_instance_type,
+                             'count': (gpu_pool_max_replicas if gpu_pool_autoscaling | bool
+                                       else gpu_pool_replicas | default(1)) | int}]
+                           if _sg_pool.action == 'create' else []),
+           'quota_codes': versions.serveguard.requirements.quota_codes,
+           'serving_type': serveguard_pool_instance_type,
+           'serving_demand': _sg_serving_demand,
+           'worker_type': versions.infrastructure.compute_instance_type,
+           'job_demands': _sg_workload | sg_workload_demands(serveguard_accelerator, '0')
+                          | rejectattr('name', 'match', 'predictor') | list,
+           'node_overhead': serveguard_node_overhead,
+           'accelerator': serveguard_accelerator }) }}
+  vars:
+    # Predictor + one co-located Job, from the collection's defaults (pre_workload)
+    _sg_serving_demand: >-
+      {{ (_sg_workload | sg_workload_demands(serveguard_accelerator, '0'))
+         | selectattr('name', 'equalto', 'predictor + story Job') | first }}
+
+- name: Quota check without workload requests
+  ansible.builtin.set_fact:
+    _sg_result:
+      rows: [{ step: quota, check: workload requests, status: fail, detail: "unknown; see the workload rows" }]
+      action: none
+  when: not (_sg_workload.predictor_cpu is defined and _sg_workload.predictor_memory is defined)
+
+- name: Keep the quota decision
+  ansible.builtin.set_fact:
+    _sg_quota: "{{ _sg_result }}"
+
+- name: Record quota checks
+  ansible.builtin.include_tasks: _record.yml

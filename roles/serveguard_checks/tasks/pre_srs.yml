@@ -1,0 +1,13 @@
+---
+- name: "pre srs: read state"
+  ansible.builtin.include_tasks: _gather_srs.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre srs: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_srs: "{{ serveguard_checks_fixtures.srs }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre srs: decide"
+  ansible.builtin.include_tasks: _evaluate_srs.yml

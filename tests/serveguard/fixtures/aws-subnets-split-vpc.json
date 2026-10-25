@@ -1,0 +1,14 @@
+[
+ {
+  "SubnetId": "subnet-priv",
+  "VpcId": "vpc-1",
+  "AvailabilityZone": "us-east-1a",
+  "MapPublicIpOnLaunch": false
+ },
+ {
+  "SubnetId": "subnet-pub",
+  "VpcId": "vpc-2",
+  "AvailabilityZone": "us-east-1a",
+  "MapPublicIpOnLaunch": true
+ }
+]

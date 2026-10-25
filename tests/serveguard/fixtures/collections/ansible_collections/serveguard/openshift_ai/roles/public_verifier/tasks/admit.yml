@@ -1,0 +1,14 @@
+---
+- name: "stub public_verifier admit: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['public_verifier:admit'] }}"
+
+- name: "stub public_verifier admit: serveguard_vsa (like vsa_fact.yml)"
+  ansible.builtin.set_fact:
+    serveguard_vsa: >-
+      {{ stub_vsa | default({
+           'adapter_ref': serveguard_adapter_ref, 'digest': 'f' * 64, 'admitted': true, 'reason': 'admitted',
+           'verified_levels': ['SERVEGUARD_CONFINEMENT_V1']
+                              + (['SERVEGUARD_COMPOSITION_V1'] if (stub_receiver_required | default(false) | bool) else []),
+           'receiver': serveguard_rendered.receiver.detector_digest if (stub_receiver_required | default(false) | bool) else ''}) }}
+  when: stub_supply_chain | default(false) | bool

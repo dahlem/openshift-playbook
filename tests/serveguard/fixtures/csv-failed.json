@@ -1,0 +1,9 @@
+{
+ "metadata": {
+  "name": "x"
+ },
+ "status": {
+  "phase": "Failed",
+  "message": "install strategy failed: deployment rhods-operator not available"
+ }
+}

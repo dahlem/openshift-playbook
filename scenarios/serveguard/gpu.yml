@@ -1,0 +1,21 @@
+---
+# ServeGuard OpenShift AI demo — GPU serving (1x NVIDIA L4).
+#
+# Same platform as cpu.yml plus NFD and the NVIDIA GPU Operator. vLLM runs the
+# Red Hat AI Inference CUDA image and requests one nvidia.com/gpu.
+#
+# The pool is g6.2xlarge, not g6.xlarge: the predictor requests 4 vCPU / 8 GiB
+# (the integration's default) and a g6.xlarge has 4 vCPU in total. The pool is
+# untainted because the rendered predictor carries no nvidia.com/gpu toleration.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/gpu.yml --ask-vault-pass
+
+operators_enabled: [cert_manager, nfd, gpu, rhoai]
+rhoai_channel: "{{ versions.serveguard.rhoai_channel }}"
+ai_platform_mode: standard
+
+serveguard_accelerator: nvidia
+serveguard_pool_name: sg-gpu
+serveguard_pool_instance_type: "{{ versions.serveguard.gpu_instance_type }}"
+serveguard_vllm_image: "{{ versions.serveguard.vllm_cuda_image }}"

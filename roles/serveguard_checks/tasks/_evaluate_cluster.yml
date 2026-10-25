@@ -1,0 +1,21 @@
+---
+- name: Evaluate the cluster
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_cluster | sg_eval_cluster({
+           'name': rosa_cluster_name,
+           'pinned': _sg_versions.version | default(none),
+           'version_pending': _sg_versions is not defined,
+           'range': serveguard_openshift_range,
+           'min': versions.serveguard.requirements.openshift[serveguard_openshift_range].min,
+           'max_exclusive': versions.serveguard.requirements.openshift[serveguard_openshift_range].max_exclusive,
+           'region': aws_region | default(''),
+           'must_exist': serveguard_cluster_must_exist | bool,
+           'allow_version': serveguard_allow_cluster_version | bool }) }}
+
+- name: Keep the cluster decision
+  ansible.builtin.set_fact:
+    _sg_cluster: "{{ _sg_result }}"
+
+- name: Record cluster checks
+  ansible.builtin.include_tasks: _record.yml

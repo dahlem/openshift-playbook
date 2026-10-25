@@ -1,0 +1,13 @@
+---
+- name: "pre workload: read state"
+  ansible.builtin.include_tasks: _gather_workload.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre workload: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_workload: "{{ serveguard_checks_fixtures.workload }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre workload: decide"
+  ansible.builtin.include_tasks: _evaluate_workload.yml

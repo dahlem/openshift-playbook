@@ -1,0 +1,22 @@
+---
+- name: Evaluate the serving pool
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_pool | sg_eval_pool({
+           'name': serveguard_pool_name,
+           'instance_type': serveguard_pool_instance_type,
+           'autoscaling': gpu_pool_autoscaling | bool,
+           'min': gpu_pool_min_replicas | int,
+           'max': gpu_pool_max_replicas | int,
+           'replicas': gpu_pool_replicas | default(1) | int,
+           'taints': [],
+           'labels': {'node.kubernetes.io/instance-type': serveguard_pool_instance_type},
+           'subnet': rosa_private_subnet | default(''),
+           'allow_mismatch': serveguard_allow_pool_mismatch | bool }) }}
+
+- name: Keep the pool decision
+  ansible.builtin.set_fact:
+    _sg_pool: "{{ _sg_result }}"
+
+- name: Record pool checks
+  ansible.builtin.include_tasks: _record.yml

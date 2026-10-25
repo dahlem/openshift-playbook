@@ -1,0 +1,12 @@
+---
+# The digest is the collection's serveguard_srs_sha256 (kzg19 by default) unless overridden;
+# the local file must exist and hash to it either way.
+- name: Evaluate the approved SRS
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_srs | sg_eval_srs({'sha256': _sg_workload.srs_sha256 | default(''),
+                                    'default_sha256': _sg_raw_workload.defaults.serveguard_srs_sha256 | default(''),
+                                    'logrows': _sg_workload.logrows | default(19)}) }}
+
+- name: Record SRS checks
+  ansible.builtin.include_tasks: _record.yml

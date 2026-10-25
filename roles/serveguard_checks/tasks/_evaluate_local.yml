@@ -1,0 +1,11 @@
+---
+- name: Evaluate local tools
+  ansible.builtin.set_fact:
+    _sg_result: "{{ _sg_raw_local | sg_eval_local(versions.serveguard.requirements) }}"
+
+- name: Keep the local decision
+  ansible.builtin.set_fact:
+    _sg_local: "{{ _sg_result }}"
+
+- name: Record local checks
+  ansible.builtin.include_tasks: _record.yml

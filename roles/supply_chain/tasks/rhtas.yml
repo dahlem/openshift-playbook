@@ -1,0 +1,106 @@
+---
+# RHTAS for serveguard_signing_mode: keyless. Precondition (pre_rhtas): the
+# Securesign CRD exists (operators role) and the service-account issuer is known.
+# Deploy: a Securesign whose Fulcio trusts the cluster's service-account issuer
+# (Type kubernetes) with Rekor, CTlog, Trillian and TUF. Postcondition: all
+# components Ready, the Sigstore ClientTrustConfig exported, and the collection
+# given serveguard_rhtas_trust_config and serveguard_rhtas_oidc_issuer.
+
+- name: The RHTAS namespace in use
+  ansible.builtin.set_fact:
+    _sc_ns: "{{ _sg_workload.rhtas_namespace | default('trusted-artifact-signer') }}"
+
+- name: RHTAS namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata: { name: "{{ _sc_ns }}" }
+  when: _sg_rhtas.action in ['create', 'update']
+
+- name: Read the existing Securesign (update mode keeps its issuers)
+  kubernetes.core.k8s_info:
+    api_version: rhtas.redhat.com/v1alpha1
+    kind: Securesign
+    namespace: "{{ _sc_ns }}"
+    name: "{{ serveguard_securesign_name }}"
+  register: _sc_ss
+  when: _sg_rhtas.action == 'update'
+
+- name: Create or update the Securesign
+  kubernetes.core.k8s:
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: rhtas.redhat.com/v1alpha1
+      kind: Securesign
+      metadata:
+        name: "{{ serveguard_securesign_name }}"
+        namespace: "{{ _sc_ns }}"
+        labels: { app.kubernetes.io/managed-by: openshift-playbook-serveguard }
+      spec:
+        fulcio:
+          externalAccess: { enabled: true }
+          config:
+            OIDCIssuers: "{{ _sc_existing_issuers + [_sc_issuer] }}"
+          certificate:
+            organizationName: "{{ serveguard_fulcio_organization }}"
+            commonName: fulcio.{{ _sc_ns }}.svc
+        rekor: { externalAccess: { enabled: true } }
+        ctlog: {}
+        trillian: { database: { create: true } }
+        tuf: { externalAccess: { enabled: true } }
+  vars:
+    _sc_issuer:
+      Issuer: "{{ _sg_rhtas.issuer }}"
+      IssuerURL: "{{ _sg_rhtas.issuer }}"
+      ClientID: "{{ _sg_workload.fulcio_audience | default('sigstore') }}"
+      Type: kubernetes
+    _sc_existing_issuers: >-
+      {{ ((((_sc_ss.resources | default([]) | first | default({})).spec | default({})).fulcio | default({})).config
+          | default({})).OIDCIssuers | default([]) }}
+  when: _sg_rhtas.action in ['create', 'update']
+
+- name: "post rhtas: wait for the components"
+  block:
+    - name: Wait for each component to be Ready
+      kubernetes.core.k8s_info:
+        api_version: rhtas.redhat.com/v1alpha1
+        kind: "{{ item }}"
+        namespace: "{{ _sc_ns }}"
+      register: _sc_comp
+      until: >-
+        _sc_comp.resources | map(attribute='status.conditions', default=[]) | flatten
+        | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+      retries: "{{ (serveguard_supply_chain_wait | int / 15) | int }}"
+      delay: 15
+      loop: [Trillian, Fulcio, Rekor, CTlog, Tuf]
+  rescue:
+    - name: Diagnose RHTAS
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: _diagnose.yml
+      vars:
+        _sg_diag_title: "RHTAS components not Ready within {{ serveguard_supply_chain_wait }}s"
+        _sg_diag_cmds:
+          - "oc get securesign,fulcio,rekor,ctlog,trillian,tuf -n {{ _sc_ns }}"
+          - "oc describe securesign {{ serveguard_securesign_name }} -n {{ _sc_ns }} | sed -n '/Status:/,$p'"
+          - "oc get pods -n {{ _sc_ns }} --field-selector status.phase!=Running"
+          - "oc get csv -n openshift-operators | grep -i rhtas"
+          - "oc get events -n {{ _sc_ns }} --field-selector type=Warning --sort-by=.lastTimestamp"
+
+- name: Component URLs
+  ansible.builtin.set_fact:
+    _sc_urls: >-
+      {{ dict(_sc_comp.results | map(attribute='item')
+              | zip(_sc_comp.results | map(attribute='resources') | map('first') | map(attribute='status')
+                    | map(attribute='url', default=''))) }}
+
+- name: Export the Sigstore ClientTrustConfig
+  ansible.builtin.include_tasks: _trust_config.yml
+
+- name: Hand the instance to the collection
+  ansible.builtin.set_fact:
+    serveguard_rhtas_trust_config: "{{ serveguard_rhtas_trust_config_export }}"
+    serveguard_rhtas_oidc_issuer: "{{ _sg_rhtas.issuer }}"

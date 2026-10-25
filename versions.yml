@@ -26,9 +26,22 @@ operators:
     source: redhat-operators
     package: servicemeshoperator
   rhoai:
-    channel: stable
+    channel: stable      # Knative/Serverless scenarios; override per scenario with rhoai_channel
     source: redhat-operators
     package: rhods-operator
+  cert_manager:          # KServe standard (RawDeployment) dependency for RHOAI 3.x
+    channel: stable-v1
+    source: redhat-operators
+    package: openshift-cert-manager-operator
+  # ServeGuard supply-chain attestation (ADR-0001), selected by mode, never by default:
+  rhtas:                 # keyless signing: Red Hat Trusted Artifact Signer 1.3.x
+    channel: stable
+    source: redhat-operators
+    package: rhtas-operator
+  kyverno:               # enforcer kyverno: Nirmata Enterprise for Kyverno (Red Hat Marketplace)
+    channel: stable      # UNVERIFIED package/channel/source: the preflight checks them
+    source: redhat-marketplace  # against the catalog and lists what is offered
+    package: nirmata-kyverno-operator
 
 infrastructure:
   gpu_instance_type: g6.xlarge
@@ -42,6 +55,49 @@ infrastructure:
 runtime:
   vllm_image: registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
   vllm_validated_image: registry.redhat.io/rhoai/odh-vllm-cuda-rhel9@sha256:46cffdeb70009f8f901e0dc658c8c499a5d2b4bbcea343741d7d7fda2a12b9b2
+
+# ServeGuard OpenShift AI demo (scenarios/serveguard/*.yml).
+# RHOAI 3.x with only KServe, standard (RawDeployment) mode.
+serveguard:
+  # Latest GA as of 2026-10-21. Switch to rhoai_next_channel once 3.6 is GA.
+  # The stable-x.y naming pattern is from the RHOAI 3.5 install guide; the exact
+  # names are checked against the cluster's PackageManifest before subscribing.
+  rhoai_channel: stable-3.5
+  rhoai_next_channel: stable-3.6
+  # Red Hat AI Inference 3.5.0 images (Red Hat AI 3 supported configurations).
+  vllm_cpu_image: registry.redhat.io/rhaii/vllm-cpu-rhel9:3.5.0     # x86_64, AVX2 minimum
+  vllm_cuda_image: registry.redhat.io/rhaii/vllm-cuda-rhel9:3.5.0
+  # Serving pool. The predictor requests 4 vCPU / 8 GiB (serveguard.openshift_ai
+  # default; checked by the quota plan check), so the pool needs 8 vCPU:
+  # m6i.2xlarge (CPU, AVX-512) or g6.2xlarge (1x L4).
+  cpu_instance_type: m6i.2xlarge
+  gpu_instance_type: g6.2xlarge
+  # What the ServeGuard checks (roles/serveguard_checks) require.
+  requirements:
+    # OpenShift for RHOAI 3.5. The sources disagree: the 3.5 installation guide says
+    # 4.19 to 4.20; the "Supported Configurations for 3.x" article says 4.19.9 to 4.22.
+    #   guide   (default): what both support -> the latest 4.20.z ROSA HCP offers
+    #   article (override, serveguard_openshift_range=article): up to 4.22.z
+    # The ServeGuard playbooks pick the version from `rosa list versions --hosted-cp`;
+    # cluster.openshift_version above stays the pin for the other scenarios.
+    openshift:
+      guide: { min: "4.19.9", max_exclusive: "4.21" }
+      article: { min: "4.19.9", max_exclusive: "4.23" }
+    # Minimum local CLI versions; null = must be present, any version.
+    # (make, uv and the workload's own tools are checked by serveguard.openshift_ai.preflight.)
+    cli: { rosa: "1.2.60", aws: "2.0.0", oc: "4.19.0", ansible_core: "2.15.0", ocm: null }
+    python_modules: [kubernetes, jmespath]
+    # Supply-chain attestation prerequisites (ADR-0001 §5.4)
+    kyverno_min: "1.12.0"
+    rhtas_minor: "1.3"
+    rhtas_openshift: { min: "4.16.0", max_exclusive: "4.22" }   # RHTAS 1.3.6: OCP 4.16-4.21
+    quay_min: "3.12.0"                                          # OCI 1.1 referrers (FEATURE_REFERRERS_API)
+    cluster_image_policy_ga: "4.20.0"                           # ClusterImagePolicy GA (TP in 4.19)
+    # EC2 vCPU quota codes per instance family (Running On-Demand instances).
+    quota_codes:
+      standard: L-1216C47A   # A, C, D, H, I, M, R, T, Z
+      g_vt: L-DB2E81BA       # G and VT
+      p: L-417A185B          # P
 
 # OCM API schema — pin API versions, response schemas, and field paths.
 # Bump api.*.version when migrating to a new OCM API version.

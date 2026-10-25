@@ -1,0 +1,20 @@
+{
+ "metadata": {
+  "name": "securesign",
+  "namespace": "trusted-artifact-signer"
+ },
+ "spec": {
+  "fulcio": {
+   "config": {
+    "OIDCIssuers": [
+     {
+      "Issuer": "https://oidc.op1.openshiftapps.com/2abc",
+      "IssuerURL": "https://oidc.op1.openshiftapps.com/2abc",
+      "ClientID": "sigstore",
+      "Type": "kubernetes"
+     }
+    ]
+   }
+  }
+ }
+}

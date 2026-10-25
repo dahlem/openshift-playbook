@@ -1,0 +1,106 @@
+---
+# The ServeGuard workload, from the serveguard.openshift_ai collection, in the
+# order of its own playbooks/demo.yml (trust domains: publisher, public verifier,
+# serving consumer). Each role checks its own pre- and postconditions, skips what
+# already holds and stops on conflicts; this file only asserts on their results.
+# Every workload variable is defined once, in the collection's roles/common
+# defaults; a scenario or -e that sets one is passed through.
+
+- name: Workload preflight (read-only)
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.preflight
+
+- name: Trust anchor (operator)
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.trust_anchor
+
+
+- name: Assert the trust_anchor supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: trust_anchor
+- name: Receiver image
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.receiver_image
+
+- name: Serving consumer domain (before publication)
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.serving_consumer
+    tasks_from: prepare
+
+- name: Public verifier derives its circuits
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.public_verifier
+    tasks_from: approve
+
+- name: Publisher proves and publishes
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.publisher
+
+
+- name: Assert the publisher supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: publisher
+- name: Public verifier admits (writes the verdict)
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.public_verifier
+    tasks_from: admit
+
+
+- name: Assert the admit supply-chain facts
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_supply_chain
+  vars:
+    _sg_stage: admit
+- name: Serving consumer serves (guard init-container, vLLM)
+  ansible.builtin.include_role:
+    name: serveguard.openshift_ai.serving_consumer
+    tasks_from: serve
+
+- name: Verify the admitted service
+  ansible.builtin.include_role:
+    name: serveguard_checks
+    tasks_from: assert_serving
+
+# The stories role fails by itself on any unexpected verdict, after setting
+# serveguard_stories_result in its own block/always; the banner below prints either way.
+- name: Stories
+  when: serveguard_run_stories | bool
+  block:
+    - name: Run the stories
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.stories
+
+    - name: Every asked story was judged; the receiver stories iff a receiver is required
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: assert_supply_chain
+      vars:
+        _sg_stage: stories
+  always:
+    - name: Story banner
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: stories_banner
+      when: serveguard_stories_result is defined
+
+- name: The admitted service survived the stories with the same adapter digest
+  when: serveguard_run_stories | bool
+  block:
+    - name: Re-observe the served state
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.serving_consumer
+        tasks_from: serve
+
+    - name: Same verdict, same adapter digest
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: assert_serving
+      vars:
+        _sg_digest_before: "{{ _sg_admitted_digest }}"

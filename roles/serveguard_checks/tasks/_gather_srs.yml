@@ -1,0 +1,16 @@
+---
+# Read-only, local: the approved SRS file on the controller. Never downloads it.
+- name: Read the approved SRS file
+  ansible.builtin.stat:
+    path: "{{ _sg_workload.srs_path | default('') | expanduser }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: _sg_srs_stat
+  when: _sg_workload.srs_path | default('') | length > 0
+
+- name: Collect SRS facts
+  ansible.builtin.set_fact:
+    _sg_raw_srs:
+      path: "{{ _sg_workload.srs_path | default('') }}"
+      exists: "{{ _sg_srs_stat.stat.exists | default(false) }}"
+      sha256: "{{ _sg_srs_stat.stat.checksum | default('') }}"

@@ -1,0 +1,13 @@
+---
+- name: "stub publisher main: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['publisher'] }}"
+
+- name: "stub publisher: supply-chain facts (ADR-0001) and the receiver block"
+  ansible.builtin.set_fact:
+    serveguard_adapter_ref: "{{ stub_adapter_ref | default('oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:' ~ 'b' * 64) }}"
+    serveguard_attestations: "{{ stub_attestations | default({'oms': 'd' * 64, 'confinement': 'c' * 64, 'provenance': 'e' * 64}) }}"
+    serveguard_receiver_block: >-
+      {{ stub_receiver_block | default({'detector_digest': serveguard_rendered.receiver.detector_digest, 'bounds': {'0': '1/2', '1': '3/4'}}
+                                        if (stub_receiver_required | default(false) | bool) else none) }}
+  when: stub_supply_chain | default(false) | bool

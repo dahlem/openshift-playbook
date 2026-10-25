@@ -1,0 +1,21 @@
+{
+ "metadata": {
+  "name": "rhods-operator"
+ },
+ "status": {
+  "channels": [
+   {
+    "name": "fast-3.x",
+    "currentCSV": "rhods-operator.v1"
+   },
+   {
+    "name": "stable-3.x",
+    "currentCSV": "rhods-operator.v1"
+   },
+   {
+    "name": "stable",
+    "currentCSV": "rhods-operator.v1"
+   }
+  ]
+ }
+}

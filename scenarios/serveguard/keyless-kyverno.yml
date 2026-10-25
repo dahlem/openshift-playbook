@@ -1,0 +1,12 @@
+---
+# ServeGuard supply-chain mode: keyless signing (RHTAS) + Kyverno enforcement.
+# Compose AFTER cpu.yml or gpu.yml:
+#   ansible-playbook playbooks/serveguard-demo.yml -e @scenarios/serveguard/cpu.yml \
+#     -e @scenarios/serveguard/keyless-kyverno.yml --ask-vault-pass
+#
+# As keyless.yml, plus Kyverno >= 1.12 (Nirmata Enterprise for Kyverno via OLM), whose
+# ClusterPolicy (applied by the collection) requires the verifier's VSA for the exact
+# adapter digest at admission. A Kyverno this playbook did not install is a conflict
+# unless serveguard_allow_existing_kyverno=true.
+serveguard_signing_mode: keyless
+serveguard_enforcer: kyverno

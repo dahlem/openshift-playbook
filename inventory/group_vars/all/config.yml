@@ -6,12 +6,21 @@
 # Version constraints (loaded from versions.yml)
 versions_file: "{{ playbook_dir }}/../versions.yml"
 
+# Operators — keys of versions.operators to install, in install order.
+# Scenarios override the list (serveguard: cert_manager + rhoai, optionally nfd + gpu).
+operators_enabled: [nfd, gpu, serverless, servicemesh, rhoai]
+rhoai_channel: "{{ versions.operators.rhoai.channel }}"
+
+# AI platform — serverless: DSC v1, KServe on Knative + Service Mesh (Mistral scenarios)
+#               standard:   DSC v2, KServe standard (RawDeployment) only (RHOAI 3.x)
+ai_platform_mode: serverless
+
 # GPU Machine Pool
 gpu_pool_name: gpu
 gpu_pool_autoscaling: true
 gpu_pool_min_replicas: 1          # ROSA requires min >= 1 when autoscaling is enabled
 gpu_pool_max_replicas: 1
-gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"
+gpu_pool_taint: "nvidia.com/gpu=present:NoSchedule"   # "" = no taint
 
 # Model Serving
 model_name: mistral-7b
@@ -53,3 +62,101 @@ batch_model_cache_provider: huggingface
 batch_model_cache_token_secret: ""
 batch_workflow_operator_channel: stable
 batch_workflow_namespace: batch-experiments
+
+# ServeGuard OpenShift AI demo (playbooks/serveguard-demo*.yml, scenarios/serveguard/)
+# The workload (trust anchor, receiver image, publisher, public verifier, serving
+# consumer, stories; the paper's trust model) is the
+# serveguard.openshift_ai collection; its role defaults are the single source of
+# the workload's settings and resource requests. Nothing here restates them: the
+# platform checks read them from the collection (serveguard_checks pre_workload),
+# and a scenario or -e that sets one of these variables overrides it for both.
+serveguard_collection: serveguard.openshift_ai
+# Every collection variable is defined once, in roles/common/defaults/main.yml.
+serveguard_collection_roles: [common]
+# Workload variables the platform checks need -> their names in the collection.
+serveguard_workload_vars:
+  predictor_cpu: serveguard_predictor_cpu            # collection default "4"
+  predictor_memory: serveguard_predictor_memory      # collection default "8Gi"
+  namespace: serveguard_namespace
+  receiver_image: serveguard_image                   # "" = in-cluster build -> internal registry
+  storage_class: serveguard_storage_class            # "" = the cluster default
+  store_access_mode: serveguard_store_access_mode
+  publisher_namespace: serveguard_publisher_namespace  # sg-publisher
+  verifier_namespace: serveguard_verifier_namespace    # sg-verifier
+  # Other workloads: serveguard_<workload>_cpu / _memory
+  build_cpu: serveguard_receiver_build_cpu           # receiver image build
+  build_memory: serveguard_receiver_build_memory
+  job_cpu: serveguard_job_cpu                        # fetch-base, loaders, story prepare Jobs
+  job_memory: serveguard_job_memory
+  guard_cpu: serveguard_guard_cpu                    # guard init-container of the predictor
+  guard_memory: serveguard_guard_memory
+  approve_cpu: serveguard_approve_cpu                # verifier derives its circuits (~11.5 GB peak)
+  approve_memory: serveguard_approve_memory
+  publish_cpu: serveguard_publish_cpu                # publisher proves (~12.4 GB peak)
+  publish_memory: serveguard_publish_memory
+  admit_cpu: serveguard_admit_cpu                    # verifier admits
+  admit_memory: serveguard_admit_memory
+  work_size: serveguard_work_size                    # emptyDir for proving keys (publish, approve)
+  logrows: serveguard_logrows                        # names the SRS (kzg<logrows>.srs)
+  # Supply-chain attestation (ADR-0001 §5.4)
+  signing_mode: serveguard_signing_mode              # keypair | keyless (RHTAS)
+  signing_keys_dir: serveguard_signing_keys_dir
+  enforcer: serveguard_enforcer                      # vap | kyverno
+  registry: serveguard_registry
+  attestation_namespace: serveguard_attestation_namespace
+  rhtas_namespace: serveguard_rhtas_namespace
+  rhtas_trust_config: serveguard_rhtas_trust_config
+  rhtas_oidc_issuer: serveguard_rhtas_oidc_issuer
+  fulcio_audience: serveguard_fulcio_audience
+  attestation_uri_base: serveguard_attestation_uri_base  # https://github.com/dahlem/serveguard/attestation
+  # Approved SRS (the digest defaults to kzg19 from EZKL v23.0.5's list; the path is site-specific)
+  srs_path: serveguard_srs_path
+  srs_sha256: serveguard_srs_sha256
+  # Write caps the anchor pins: beta on ||B_s||_2, gamma on ||B_s C||_2
+  max_write_norm: serveguard_max_write_norm
+  max_typed_gain: serveguard_max_typed_gain
+  # Receiver composition certificate (factored, Chapter 8 of the serveguard playbook)
+  receiver_required: serveguard_receiver_required
+  receiver_descriptor: serveguard_receiver_descriptor
+  overrides: serveguard_overrides                    # per-step overrides, e.g. {trust_anchor: true}
+  kyverno_namespace: serveguard_kyverno_namespace        # the collection grants this namespace pull on attestations
+# These must be in the collection's defaults (or overridden); the rest are optional.
+serveguard_workload_required: [predictor_cpu, predictor_memory, publish_cpu, publish_memory, approve_cpu, approve_memory]
+# Environment bindings the collection needs from this checkout layout (not workload
+# defaults): the serveguard checkout (receiver_image builds from it) and its CLI.
+serveguard_repo_dir: "{{ (playbook_dir ~ '/../../serveguard') | realpath }}"
+serveguard_cli: "uv run --project {{ serveguard_repo_dir }}/integrations/openshift-ai --frozen serveguard-openshift-ai"
+# The approved KZG SRS file is site-specific: set serveguard_srs_path in
+# inventory/group_vars/all/site.yml or with -e. Its digest defaults to the collection's
+# serveguard_srs_sha256 (kzg19); override it only for another approved SRS.
+# OpenShift range for RHOAI 3.5 (versions.yml serveguard.requirements.openshift):
+#   guide (both sources agree, latest 4.20.z) | article (up to 4.22.z)
+serveguard_openshift_range: guide
+serveguard_run_stories: true
+# ---- supply-chain prerequisites (platform side; ADR-0001 §5.4) -----------------------
+# Where the playbook exports the RHTAS instance's Sigstore ClientTrustConfig (keyless);
+# it is then passed to the collection as serveguard_rhtas_trust_config.
+serveguard_rhtas_trust_config_export: "{{ lookup('ansible.builtin.env', 'HOME') }}/.cache/serveguard-openshift-ai/rhtas-client-trust-config.json"
+serveguard_securesign_name: securesign
+# Kyverno instance for the Nirmata operator (its CR shape is operator-specific; see
+# docs/serveguard.md). Empty: the operator's own default instance is expected.
+serveguard_kyverno_instance: {}
+serveguard_allow_existing_kyverno: false     # use a Kyverno not installed by this playbook
+serveguard_allow_securesign_update: false    # add our OIDC issuer to an existing Securesign
+# Optional Red Hat Quay as the registry (not installed here): the QuayRegistry CR to check.
+serveguard_quay: {}                          # e.g. { namespace: quay, name: registry }
+# Optional ClusterImagePolicy pinning the receiver image's signature (GA in 4.20).
+serveguard_cluster_image_policy: false
+serveguard_receiver_image_public_key: ""     # PEM the receiver image is signed with (PublicKey root)
+serveguard_allow_cip_tech_preview: false     # allow it on 4.19 (Tech Preview)
+serveguard_cip_name: serveguard-receiver
+# Platform-side sizing (not workload settings):
+serveguard_min_node_ephemeral: 30Gi          # vLLM image + model on the predictor's node
+# Estimated per-node system reservation + daemonsets, for the plan check before
+# the cluster or pool exists (OpenShift reserves CPU/memory on every node).
+serveguard_node_overhead: { cpu: 1500m, memory: 4Gi }
+# Overrides: accept a conflicting existing resource instead of stopping.
+serveguard_allow_cluster_version: false      # cluster outside the supported OpenShift range
+serveguard_allow_pool_mismatch: false        # use an existing pool whose spec differs
+serveguard_allow_channel_change: false       # move an existing Subscription to the requested channel
+serveguard_allow_dsc_update: false           # change component states of an existing DSC

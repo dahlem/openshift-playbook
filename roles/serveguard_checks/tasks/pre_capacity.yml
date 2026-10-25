@@ -1,0 +1,13 @@
+---
+- name: "pre capacity: read state"
+  ansible.builtin.include_tasks: _gather_capacity.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre capacity: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_capacity: "{{ serveguard_checks_fixtures.capacity }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre capacity: decide"
+  ansible.builtin.include_tasks: _evaluate_capacity.yml

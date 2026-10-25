@@ -1,0 +1,17 @@
+---
+- name: Load the ai_platform API versions and component lists
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../ai_platform/defaults/main.yml"
+  when: ai_platform_api_versions is not defined
+
+- name: "pre platform: read state"
+  ansible.builtin.include_tasks: _gather_platform.yml
+  when: serveguard_checks_fixtures is not defined
+
+- name: "pre platform: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_platform: "{{ serveguard_checks_fixtures.platform }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre platform: decide"
+  ansible.builtin.include_tasks: _evaluate_platform.yml

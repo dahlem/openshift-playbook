@@ -1,0 +1,65 @@
+---
+# Remove what roles/supply_chain created (never a foreign Securesign or Kyverno).
+- name: Read the Securesign this playbook created
+  kubernetes.core.k8s_info:
+    api_version: rhtas.redhat.com/v1alpha1
+    kind: Securesign
+    namespace: "{{ _sg_workload.rhtas_namespace | default('trusted-artifact-signer') }}"
+    name: "{{ serveguard_securesign_name }}"
+    label_selectors: ["app.kubernetes.io/managed-by=openshift-playbook-serveguard"]
+  register: _sc_td_ss
+  failed_when: false
+  when: (_sg_workload.signing_mode | default('keypair')) == 'keyless'
+
+- name: Delete it
+  kubernetes.core.k8s:
+    state: absent
+    api_version: rhtas.redhat.com/v1alpha1
+    kind: Securesign
+    namespace: "{{ _sg_workload.rhtas_namespace | default('trusted-artifact-signer') }}"
+    name: "{{ serveguard_securesign_name }}"
+    wait: true
+    wait_timeout: "{{ serveguard_supply_chain_wait }}"
+  when: _sc_td_ss.resources | default([]) | length > 0
+
+- name: Delete the Kyverno instance this playbook created
+  kubernetes.core.k8s:
+    state: absent
+    definition: "{{ serveguard_kyverno_instance }}"
+    wait: true
+  failed_when: false
+  when: (_sg_workload.enforcer | default('vap')) == 'kyverno' and serveguard_kyverno_instance | length > 0
+
+- name: Delete the receiver ClusterImagePolicy
+  kubernetes.core.k8s:
+    state: absent
+    api_version: config.openshift.io/v1
+    kind: ClusterImagePolicy
+    name: "{{ serveguard_cip_name }}"
+  failed_when: false
+  when: serveguard_cluster_image_policy | bool
+
+- name: Read the RHTAS Subscription
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    namespace: openshift-operators
+    name: rhtas-operator
+  register: _sc_td_sub
+  when: (_sg_workload.signing_mode | default('keypair')) == 'keyless'
+
+- name: Delete the RHTAS Subscription and only its installed CSV
+  kubernetes.core.k8s:
+    state: absent
+    api_version: operators.coreos.com/v1alpha1
+    kind: "{{ item.kind }}"
+    namespace: openshift-operators
+    name: "{{ item.name }}"
+  loop: >-
+    {{ [{'kind': 'Subscription', 'name': 'rhtas-operator'}]
+       + ([{'kind': 'ClusterServiceVersion', 'name': _sc_td_sub.resources[0].status.installedCSV}]
+          if (_sc_td_sub.resources | default([]) | length > 0
+              and _sc_td_sub.resources[0].status.installedCSV is defined) else []) }}
+  loop_control:
+    label: "{{ item.kind }}/{{ item.name }}"
+  when: _sc_td_sub.resources | default([]) | length > 0

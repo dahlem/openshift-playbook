@@ -1,0 +1,170 @@
+---
+- name: Create DSCInitialization
+  kubernetes.core.k8s:
+    state: present
+    server_side_apply:
+      field_manager: ansible
+    definition:
+      apiVersion: dscinitialization.opendatahub.io/v1
+      kind: DSCInitialization
+      metadata:
+        name: default-dsci
+      spec:
+        applicationsNamespace: redhat-ods-applications
+        monitoring:
+          managementState: Managed
+          namespace: redhat-ods-monitoring
+        serviceMesh:
+          auth:
+            audiences: ["https://kubernetes.default.svc"]
+          controlPlane:
+            metricsCollection: Istio
+            name: data-science-smcp
+            namespace: istio-system
+          managementState: Managed
+        trustedCABundle:
+          customCABundle: ""
+          managementState: Managed
+
+- name: Check for stuck Terminating pods in RHOAI operator
+  ansible.builtin.command:
+    cmd: >-
+      oc get pods -n redhat-ods-operator -l name=rhods-operator
+      --field-selector=status.phase=Running
+      -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{"\n"}{end}'
+  register: _stuck_pods
+  changed_when: false
+
+- name: Force-delete stuck Terminating pods
+  ansible.builtin.command:
+    cmd: "oc delete pod -n redhat-ods-operator {{ item }} --force --grace-period=0"
+  loop: "{{ _stuck_pods.stdout_lines | default([]) }}"
+  when: _stuck_pods.stdout_lines | default([]) | length > 0
+
+- name: Wait for RHOAI operator to be ready
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-operator
+    label_selectors:
+      - "name=rhods-operator"
+  register: _rhoai_operator
+  until: >-
+    _rhoai_operator.resources | default([]) | length > 0 and
+    (_rhoai_operator.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+- name: Create DataScienceCluster
+  kubernetes.core.k8s:
+    state: present
+    server_side_apply:
+      field_manager: ansible
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components:
+          codeflare:        { managementState: Managed }
+          dashboard:        { managementState: Managed }
+          datasciencepipelines: { managementState: Managed }
+          feastoperator:    { managementState: Removed }
+          kserve:
+            managementState: Managed
+            nim: { managementState: Managed }
+            serving:
+              ingressGateway:
+                certificate: { type: OpenshiftDefaultIngress }
+              managementState: Managed
+              name: knative-serving
+          kueue:            { managementState: Managed }
+          llamastackoperator: { managementState: Removed }
+          modelmeshserving: { managementState: Managed }
+          modelregistry:    { managementState: Managed, registriesNamespace: rhoai-model-registries }
+          ray:              { managementState: Managed }
+          trainingoperator: { managementState: Managed }
+          trustyai:         { managementState: Managed }
+          workbenches:      { managementState: Managed }
+
+- name: Set Knative revision timeouts
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: config-defaults
+        namespace: knative-serving
+      data:
+        revision-timeout-seconds: "{{ knative_revision_timeout | default('600') }}"
+        revision-response-start-timeout-seconds: "{{ knative_revision_timeout | default('600') }}"
+    merge_type: merge
+
+- name: Wait for KServe CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: inferenceservices.serving.kserve.io
+  register: _kserve_crd
+  until: _kserve_crd.resources | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for KServe controller
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-applications
+    name: kserve-controller-manager
+  register: _kserve_deploy
+  until: >-
+    _kserve_deploy.resources | length > 0 and
+    (_kserve_deploy.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for ServiceMeshMember CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: servicemeshmembers.maistra.io
+  register: _smm_crd
+  until: _smm_crd.resources | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Ensure model namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ model_namespace }}"
+
+- name: Join model namespace to service mesh
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: maistra.io/v1
+      kind: ServiceMeshMember
+      metadata:
+        name: default
+        namespace: "{{ model_namespace }}"
+      spec:
+        controlPlaneRef:
+          name: data-science-smcp
+          namespace: istio-system
+
+- name: Wait for mesh membership
+  kubernetes.core.k8s_info:
+    api_version: maistra.io/v1
+    kind: ServiceMeshMemberRoll
+    namespace: istio-system
+    name: default
+  register: _smmr
+  until: >-
+    _smmr.resources | length > 0 and
+    model_namespace in (_smmr.resources[0].status.configuredMembers | default([]))
+  retries: 30
+  delay: 5

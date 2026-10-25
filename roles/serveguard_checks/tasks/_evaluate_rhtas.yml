@@ -1,0 +1,17 @@
+---
+- name: Evaluate RHTAS
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_rhtas | sg_eval_rhtas({
+           'mode': _sg_workload.signing_mode | default('keypair'),
+           'namespace': _sg_workload.rhtas_namespace | default('trusted-artifact-signer'),
+           'name': serveguard_securesign_name,
+           'issuer': _sg_workload.rhtas_oidc_issuer | default(''),
+           'allow_update': serveguard_allow_securesign_update | bool }) }}
+
+- name: Keep the RHTAS decision
+  ansible.builtin.set_fact:
+    _sg_rhtas: "{{ _sg_result }}"
+
+- name: Record RHTAS checks
+  ansible.builtin.include_tasks: _record.yml

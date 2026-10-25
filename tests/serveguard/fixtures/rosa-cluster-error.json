@@ -1,0 +1,20 @@
+{
+ "name": "serveguard",
+ "id": "2abc",
+ "status": {
+  "state": "error"
+ },
+ "openshift_version": "4.20.12",
+ "hypershift": {
+  "enabled": true
+ },
+ "region": {
+  "id": "us-east-1"
+ },
+ "api": {
+  "url": "https://api.serveguard.abcd.p3.openshiftapps.com:443"
+ },
+ "subscription": {
+  "id": "sub1"
+ }
+}

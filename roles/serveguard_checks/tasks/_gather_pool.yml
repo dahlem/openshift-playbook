@@ -1,0 +1,26 @@
+---
+# Read-only: the serving machine pool and its nodes.
+
+- name: Read the serving pool
+  ansible.builtin.command: >-
+    rosa describe machinepool {{ serveguard_pool_name }} --cluster={{ rosa_cluster_name }} -o json
+  register: _sg_pool_out
+  changed_when: false
+  failed_when: false
+  when: _sg_raw_cluster.exists | bool
+
+- name: Read the serving pool's nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    label_selectors:
+      - "node.kubernetes.io/instance-type={{ serveguard_pool_instance_type }}"
+  register: _sg_pool_nodes
+  when: _sg_cluster_reachable | bool
+
+- name: Collect pool facts
+  ansible.builtin.set_fact:
+    _sg_raw_pool:
+      cluster_exists: "{{ _sg_raw_cluster.exists | bool }}"
+      exists: "{{ (_sg_pool_out.rc | default(1)) == 0 }}"
+      pool: "{{ (_sg_pool_out.stdout | from_json) if (_sg_pool_out.rc | default(1)) == 0 else {} }}"
+      nodes: "{{ _sg_pool_nodes.resources | default([]) }}"

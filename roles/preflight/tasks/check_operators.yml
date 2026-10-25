@@ -7,7 +7,7 @@
     name: "{{ item.value.package }}"
   register: _pkg_check
   failed_when: false
-  loop: "{{ versions.operators | dict2items }}"
+  loop: "{{ versions.operators | dict2items | selectattr('key', 'in', operators_enabled) | list }}"
   loop_control:
     label: "{{ item.key }}"
   when: _cluster_exists and _cluster_state == 'ready'
@@ -29,7 +29,7 @@
   ansible.builtin.debug:
     msg: >-
       {{ item.item.key }}: package={{ item.item.value.package }}
-      channel={{ item.item.value.channel }}
+      channel={{ rhoai_channel if item.item.key == 'rhoai' else item.item.value.channel }}
       available_channels={{ item.resources[0].status.channels | map(attribute='name') | list
       if (item.resources | default([]) | length > 0) else 'unknown' }}
   loop: "{{ _pkg_check.results }}"

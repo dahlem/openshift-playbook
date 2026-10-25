@@ -18,8 +18,11 @@
 
 - name: Verify cluster version
   ansible.builtin.assert:
-    that: _cluster.openshift_version is version(versions.cluster.openshift_version, '>=')
-    fail_msg: "Cluster version {{ _cluster.openshift_version }} is older than required {{ versions.cluster.openshift_version }}."
+    that: _cluster.openshift_version is version(_required_version, '>=')
+    fail_msg: "Cluster version {{ _cluster.openshift_version }} is older than required {{ _required_version }}."
+  vars:
+    # rosa_openshift_version: set by the ServeGuard playbooks; unset for the other scenarios
+    _required_version: "{{ rosa_openshift_version | default(versions.cluster.openshift_version) }}"
 
 - name: "rosa_cluster postconditions: PASSED"
   ansible.builtin.debug:

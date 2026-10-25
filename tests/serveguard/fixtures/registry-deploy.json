@@ -1,0 +1,8 @@
+{
+ "metadata": {
+  "name": "image-registry"
+ },
+ "status": {
+  "readyReplicas": 2
+ }
+}

@@ -1,0 +1,429 @@
+---
+# Offline: the workload half of the ServeGuard playbooks against a minimal stub of
+# serveguard.openshift_ai (fixtures/collections; same entry points and result
+# facts as the real collection, checked by test_interface.yml). Covers the role
+# order, the assertions on serveguard_serving_result, and the story banner.
+- name: ServeGuard workload wiring (offline, stub collection)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    serveguard_run_stories: true
+    _demo_order: [preflight, trust_anchor, receiver_image, "serving_consumer:prepare", "public_verifier:approve",
+                  publisher, "public_verifier:admit", "serving_consumer:serve", stories, "serving_consumer:serve"]
+  tasks:
+    - name: Run the workload include
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+
+    - name: Roles ran in the collection's order; the served state was re-observed after the stories
+      ansible.builtin.assert:
+        that:
+          - stub_calls == _demo_order
+          - _sg_admitted_digest == '28266fff00'
+          - _sg_story_failures == []
+        fail_msg: "{{ stub_calls | to_json }}"
+
+    - name: Reset the call log
+      ansible.builtin.set_fact:
+        stub_calls: []
+
+    - name: A failed guard fails the workload
+      block:
+        - name: Run with the guard exiting 1
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_guard_exit: 1
+        - name: Not reached
+          ansible.builtin.fail: { msg: "guard exit 1 was not caught" }
+      rescue:
+        - name: The serving assertion names the guard
+          ansible.builtin.assert:
+            that: "'guard exit=1' in ansible_failed_result.msg"
+
+    - name: Reset the call log
+      ansible.builtin.set_fact:
+        stub_calls: []
+
+    - name: An adapter digest changed by the stories fails
+      block:
+        - name: Run with the digest changing during the stories
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_digest_after_stories: "0000"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "digest change was not caught" }
+      rescue:
+        - name: The digest assertion fired
+          ansible.builtin.assert:
+            that: "'adapter changed 28266fff00 -> 0000' in ansible_failed_result.msg"
+
+    - name: Reset the call log
+      ansible.builtin.set_fact:
+        stub_calls: []
+
+    - name: An unexpected story fails in the stories role; the banner still prints it
+      block:
+        - name: Run with one story not as expected
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+          vars:
+            stub_stories:
+              - { story: query, expected: served, verdict: served, reason: "", verifier: consumer, as_expected: true }
+              - { story: forged-verdict, expected: refused, verdict: served, reason: "the policy admitted it", verifier: policy, as_expected: false }
+        - name: Not reached
+          ansible.builtin.fail: { msg: "unexpected story was not caught" }
+      rescue:
+        - name: The stories role failed, and the banner (always) computed the failure
+          ansible.builtin.assert:
+            that:
+              - "'forged-verdict' in ansible_failed_result.msg"
+              - _sg_story_failures == ['forged-verdict']
+              - "'serving_consumer:serve' not in stub_calls[-1:]"
+
+    # ---- with supply-chain attestation (ADR-0001): facts asserted, banner shows them
+    - name: Supply-chain run
+      vars:
+        stub_supply_chain: true
+        _sg_workload: { supply_chain: true }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+
+        - name: Run the workload with supply-chain facts
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+
+        - name: Facts asserted and the digest-pinned adapter ref remembered
+          ansible.builtin.assert:
+            that:
+              - _sg_admitted_digest is match('^oci://.+@sha256:[0-9a-f]{64}$')
+              - stub_calls == _demo_order
+
+    - name: A VSA that did not admit fails right after admit
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { adapter_ref: "oci://r/a@sha256:{{ 'b' * 64 }}", admitted: false, reason: "certificate does not verify" } }
+      block:
+        - name: Run with a refused VSA
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "refused VSA was not caught" }
+      rescue:
+        - name: The admit assertion fired before serving
+          ansible.builtin.assert:
+            that:
+              - "'admit: facts missing or malformed' in ansible_failed_result.msg"
+              - stub_calls[-1] == 'public_verifier:admit'
+
+    - name: A tag-addressed adapter ref fails right after the publisher
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_adapter_ref: "oci://registry/sg-publisher/serveguard-adapter:latest" }
+      block:
+        - name: Run with a tag reference
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "tag ref was not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: facts missing or malformed' in ansible_failed_result.msg"
+
+    - name: A missing OMS attestation fails after the publisher
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_attestations: { confinement: "{{ 'c' * 64 }}" } }
+      block:
+        - name: Run without the OMS signature
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "missing attestations were not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: facts missing or malformed' in ansible_failed_result.msg"
+
+    - name: A VSA for another digest fails right after admit
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_vsa: { adapter_ref: "oci://r/a@sha256:{{ '0' * 64 }}", admitted: true, reason: admitted } }
+      block:
+        - name: Run with a VSA naming another digest
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "foreign-digest VSA was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: facts missing or malformed' in ansible_failed_result.msg"
+
+    - name: An unsigned trust anchor fails after trust_anchor
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_anchor_signed: false }
+      block:
+        - name: Run with an unsigned anchor
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "unsigned anchor was not caught" }
+      rescue:
+        - name: The trust-anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: facts missing or malformed' in ansible_failed_result.msg"
+
+    - name: A malformed trust-anchor digest fails after trust_anchor
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true }, stub_anchor_digest: "not-a-digest" }
+      block:
+        - name: Run with a bad anchor digest
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "bad anchor digest was not caught" }
+      rescue:
+        - name: The trust-anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: facts missing or malformed' in ansible_failed_result.msg"
+
+    # ---- receiver composition certificate (serveguard_receiver_required) -----------------
+    - name: Receiver run
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+
+        - name: Run the workload with a required receiver
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+
+        - name: Composition level, receiver block and the four receiver stories asserted
+          ansible.builtin.assert:
+            that:
+              - "'SERVEGUARD_COMPOSITION_V1' in serveguard_vsa.verified_levels"
+              - serveguard_receiver_stories_result | length == 4
+              - serveguard_stories_result | length == 8
+
+    - name: "Fails at publisher: no receiver block from the publisher"
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_receiver_block: null }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "no receiver block from the publisher was not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at publisher: receiver block for another detector"
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_receiver_block: { detector_digest: "{{ '9' * 64 }}", bounds: { '0': '1/2' } } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "receiver block for another detector was not caught" }
+      rescue:
+        - name: The publisher assertion fired
+          ansible.builtin.assert:
+            that: "'publisher: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at admit: VSA without SERVEGUARD_COMPOSITION_V1"
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_vsa: { adapter_ref: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", digest: "{{ 'f' * 64 }}", admitted: true, reason: admitted, verified_levels: [SERVEGUARD_CONFINEMENT_V1], receiver: "{{ '4' * 64 }}" } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "VSA without SERVEGUARD_COMPOSITION_V1 was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at stories: a receiver story missing"
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_receiver_stories: [{ story: receiver-admitted, expected: admitted, verdict: admitted, reason: "", verifier: guard, as_expected: true }] }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "a receiver story missing was not caught" }
+      rescue:
+        - name: The stories assertion fired
+          ansible.builtin.assert:
+            that: "'stories: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at trust_anchor: an anchor without the receiver"
+      vars: { stub_supply_chain: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_receiver_required: false }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "an anchor without the receiver was not caught" }
+      rescue:
+        - name: The trust_anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at admit: a VSA digest that is not a SHA-256"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_vsa: { adapter_ref: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", digest: "", admitted: true, reason: admitted, verified_levels: [SERVEGUARD_CONFINEMENT_V1], receiver: "" } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "a VSA digest that is not a SHA-256 was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at admit: a VSA without SERVEGUARD_CONFINEMENT_V1"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_vsa: { adapter_ref: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", digest: "{{ 'f' * 64 }}", admitted: true, reason: admitted, verified_levels: [], receiver: "" } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "a VSA without SERVEGUARD_CONFINEMENT_V1 was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at admit: a VSA naming a receiver although none is required"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_vsa: { adapter_ref: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", digest: "{{ 'f' * 64 }}", admitted: true, reason: admitted, verified_levels: [SERVEGUARD_CONFINEMENT_V1], receiver: "{{ '4' * 64 }}" } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "a VSA naming a receiver although none is required was not caught" }
+      rescue:
+        - name: The admit assertion fired
+          ansible.builtin.assert:
+            that: "'admit: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at serving: the served adapter differs from the published one after the stories"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_served_ref_after_stories: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ '0' * 64 }}" }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "the served adapter differs from the published one after the stories was not caught" }
+      rescue:
+        - name: The serving assertion fired
+          ansible.builtin.assert:
+            that: "'ServeGuard serving postcondition failed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at trust_anchor: an anchor that does not require the receiver although its detector is pinned"
+      vars: { stub_supply_chain: true, stub_receiver_required: true, _sg_workload: { supply_chain: true, receiver_required: true }, stub_rendered_receiver: { required: false, detector_digest: "{{ '4' * 64 }}", tau: 0.05, max_bound: '3/2' } }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "an anchor that does not require the receiver although its detector is pinned was not caught" }
+      rescue:
+        - name: The trust_anchor assertion fired
+          ansible.builtin.assert:
+            that: "'trust_anchor: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at stories: receiver stories without a required receiver"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_stories: [{ story: query, expected: served, verdict: served, reason: "", verifier: consumer, as_expected: true }, { story: unadmitted-isvc, expected: refused, verdict: refused, reason: "", verifier: policy, as_expected: true }, { story: tamper-read-factor, expected: refused, verdict: refused, reason: "", verifier: guard, as_expected: true }, { story: restore, expected: served, verdict: served, reason: "", verifier: guard, as_expected: true }, { story: receiver-admitted, expected: admitted, verdict: admitted, reason: "", verifier: guard, as_expected: true }] }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "receiver stories without a required receiver was not caught" }
+      rescue:
+        - name: The stories assertion fired
+          ansible.builtin.assert:
+            that: "'stories: facts missing or malformed' in ansible_failed_result.msg"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: "Fails at serving: the first served adapter differs from the published one"
+      vars: { stub_supply_chain: true, stub_receiver_required: false, _sg_workload: { supply_chain: true, receiver_required: false }, stub_served_ref: "oci://image-registry.openshift-image-registry.svc:5000/sg-publisher/serveguard-adapter@sha256:{{ '0' * 64 }}" }
+      block:
+        - name: Reset the call log
+          ansible.builtin.set_fact:
+            stub_calls: []
+        - name: Run the workload
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../playbooks/includes/serveguard-demo-workload.yml"
+        - name: Not reached
+          ansible.builtin.fail: { msg: "the first served adapter differs from the published one was not caught" }
+      rescue:
+        - name: The serving assertion fired
+          ansible.builtin.assert:
+            # at the first serve, before any story ran
+            that:
+              - "'ServeGuard serving postcondition failed' in ansible_failed_result.msg"
+              - "'stories' not in stub_calls"
+            fail_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Banner shows the adapter ref, VSA verdict, digest and levels, receiver, caps, anchor
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: stories_banner }
+      vars:
+        serveguard_stories_result: [{ story: query, expected: served, verdict: served, reason: "", as_expected: true }]
+        serveguard_receiver_stories_result: [{ story: receiver-admitted, as_expected: true }, { story: receiver-missing, as_expected: true }]
+        serveguard_adapter_ref: "oci://r/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}"
+        serveguard_vsa: { adapter_ref: "oci://r/sg-publisher/serveguard-adapter@sha256:{{ 'b' * 64 }}", digest: "{{ 'f' * 64 }}",
+                          admitted: true, reason: admitted, verified_levels: [SERVEGUARD_CONFINEMENT_V1, SERVEGUARD_COMPOSITION_V1],
+                          receiver: "{{ '4' * 64 }}" }
+        serveguard_rendered: { anchor_digest: "{{ 'a' * 64 }}", anchor_signed: true }
+        _sg_workload: { attestation_uri_base: "https://github.com/dahlem/serveguard/attestation", max_write_norm: 4.0, max_typed_gain: 16.0 }
+
+    - name: The banner lines
+      ansible.builtin.assert:
+        that:
+          - "_sg_banner | select('match', '^  adapter: +oci://r/sg-publisher/serveguard-adapter@sha256:b{64}$') | list | length == 1"
+          - "_sg_banner | select('match', '^  VSA: +admitted for oci://r/sg-publisher/serveguard-adapter@sha256:b{64} [(]admitted[)]$') | list | length == 1"
+          - "_sg_banner | select('match', '^  VSA digest: +f{64}$') | list | length == 1"
+          - "_sg_banner | select('match', '^  levels: +SERVEGUARD_CONFINEMENT_V1, SERVEGUARD_COMPOSITION_V1$') | list | length == 1"
+          - "_sg_banner | select('match', '^  receiver: +detector 4{64} [(]2/2 receiver stories as expected[)]$') | list | length == 1"
+          - "_sg_banner | select('match', '^  caps: +beta 4.0, gamma 16.0$') | list | length == 1"
+          - "_sg_banner | select('match', '^  trust anchor: a{64} [(]operator-signed[)]$') | list | length == 1"
+          - _sg_banner | select('search', 'WARNING') | list | length == 0
+        fail_msg: "{{ _sg_banner | to_json }}"
+
+    - name: A URI base under .invalid still warns
+      ansible.builtin.include_role: { name: serveguard_checks, tasks_from: stories_banner }
+      vars:
+        serveguard_stories_result: [{ story: query, expected: served, verdict: served, reason: "", as_expected: true }]
+        _sg_workload: { attestation_uri_base: "https://serveguard.invalid/attestation" }
+
+    - name: The placeholder warning
+      ansible.builtin.assert:
+        that: "_sg_banner | select('match', '^  WARNING: +attestation URIs use the placeholder https://serveguard.invalid/attestation$') | list | length == 1"
+        fail_msg: "{{ _sg_banner | to_json }}"
+
+    - name: Teardown resolves
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.teardown
+
+    - name: Teardown was called
+      ansible.builtin.assert:
+        that: stub_calls[-1] == 'teardown'

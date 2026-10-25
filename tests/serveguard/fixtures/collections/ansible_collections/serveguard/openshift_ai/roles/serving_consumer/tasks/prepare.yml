@@ -1,0 +1,4 @@
+---
+- name: "stub serving_consumer prepare: record the call"
+  ansible.builtin.set_fact:
+    stub_calls: "{{ (stub_calls | default([])) + ['serving_consumer:prepare'] }}"

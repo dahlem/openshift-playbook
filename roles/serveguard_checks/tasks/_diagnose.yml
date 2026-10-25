@@ -1,0 +1,18 @@
+---
+# Print read-only diagnostics, then fail. Input: _sg_diag_title, _sg_diag_cmds [shell].
+- name: "Diagnose: {{ _sg_diag_title }}"
+  ansible.builtin.shell: "set -o pipefail; {{ item }} 2>&1 | tail -40"
+  args:
+    executable: /bin/bash
+  register: _sg_diag
+  changed_when: false
+  failed_when: false
+  loop: "{{ _sg_diag_cmds }}"
+
+- name: "Diagnostics: {{ _sg_diag_title }}"
+  ansible.builtin.debug:
+    msg: "{{ _sg_diag.results | map(attribute='item') | map('regex_replace', '^', '$ ') | zip(_sg_diag.results | map(attribute='stdout')) | flatten }}"
+
+- name: "Postcondition failed: {{ _sg_diag_title }}"
+  ansible.builtin.fail:
+    msg: "{{ _sg_diag_title }}. Diagnostics above; the step is safe to re-run once fixed."

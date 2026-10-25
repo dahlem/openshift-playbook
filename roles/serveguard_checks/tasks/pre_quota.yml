@@ -1,0 +1,13 @@
+---
+- name: "pre quota: read state"
+  ansible.builtin.include_tasks: _gather_quota.yml
+  when: serveguard_checks_fixtures is not defined
+
+# Offline tests (tests/serveguard) supply the gathered state instead.
+- name: "pre quota: state from fixtures"
+  ansible.builtin.set_fact:
+    _sg_raw_quota: "{{ serveguard_checks_fixtures.quota }}"
+  when: serveguard_checks_fixtures is defined
+
+- name: "pre quota: decide"
+  ansible.builtin.include_tasks: _evaluate_quota.yml

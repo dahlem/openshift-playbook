@@ -1,0 +1,103 @@
+---
+# KServe standard (RawDeployment) only: cert-manager -> RHOAI operator -> DSCI -> DSC v2.
+
+- name: Wait for cert-manager webhook
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: cert-manager
+    name: cert-manager-webhook
+  register: _cm_webhook
+  until: >-
+    _cm_webhook.resources | length > 0 and
+    (_cm_webhook.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for RHOAI operator CSV to succeed
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: redhat-ods-operator
+  register: _rhoai_csv
+  until: >-
+    _rhoai_csv.resources | default([])
+    | selectattr('metadata.name', 'match', 'rhods-operator')
+    | selectattr('status.phase', 'defined')
+    | selectattr('status.phase', 'equalto', 'Succeeded') | list | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for the operator to create default-dsci
+  kubernetes.core.k8s_info:
+    api_version: "{{ _dsci_api_version }}"
+    kind: DSCInitialization
+    name: default-dsci
+  register: _dsci
+  until: _dsci.resources | length > 0
+  retries: 18
+  delay: 10
+  failed_when: false
+
+- name: Create DSCInitialization (operator did not create one)
+  kubernetes.core.k8s:
+    state: present
+    server_side_apply:
+      field_manager: ansible
+    definition:
+      apiVersion: "{{ _dsci_api_version }}"
+      kind: DSCInitialization
+      metadata:
+        name: default-dsci
+      spec: "{{ ai_platform_standard_dsci_spec }}"
+  when: _dsci.resources | default([]) | length == 0
+
+- name: Assemble DataScienceCluster components
+  ansible.builtin.set_fact:
+    _dsc_spec_components: >-
+      {{ dict(ai_platform_standard_removed | product([{'managementState': 'Removed'}]))
+         | combine({'kserve': ai_platform_standard_kserve}) }}
+
+- name: Create DataScienceCluster (KServe only)
+  kubernetes.core.k8s:
+    state: present
+    server_side_apply:
+      field_manager: ansible
+    definition:
+      apiVersion: "{{ _dsc_api_version }}"
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components: "{{ _dsc_spec_components }}"
+
+- name: Wait for KServe CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: inferenceservices.serving.kserve.io
+  register: _kserve_crd
+  until: _kserve_crd.resources | length > 0
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for KServe controller
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-applications
+    name: kserve-controller-manager
+  register: _kserve_deploy
+  until: >-
+    _kserve_deploy.resources | length > 0 and
+    (_kserve_deploy.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10
+
+- name: Wait for DataScienceCluster Ready
+  kubernetes.core.k8s_info:
+    api_version: "{{ _dsc_api_version }}"
+    kind: DataScienceCluster
+    name: default-dsc
+  register: _dsc
+  until: (_dsc.resources[0].status.phase | default('')) == 'Ready'
+  retries: "{{ (crd_wait_timeout | int / 10) | int }}"
+  delay: 10

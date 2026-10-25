@@ -1,0 +1,44 @@
+---
+- name: Read the DSC and DSCI CRDs
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: _sg_dsc_crds
+  loop:
+    - datascienceclusters.datasciencecluster.opendatahub.io
+    - dscinitializations.dscinitialization.opendatahub.io
+  when: _sg_cluster_reachable | bool
+
+- name: Read DataScienceClusters
+  kubernetes.core.k8s_info:
+    api_version: "datasciencecluster.opendatahub.io/{{ ai_platform_api_versions.standard.dsc }}"
+    kind: DataScienceCluster
+  register: _sg_dscs
+  failed_when: false
+  when: _sg_cluster_reachable | bool and (_sg_dsc_crds.results[0].resources | default([]) | length > 0)
+
+- name: Read DSCInitializations
+  kubernetes.core.k8s_info:
+    api_version: "dscinitialization.opendatahub.io/{{ ai_platform_api_versions.standard.dsci }}"
+    kind: DSCInitialization
+  register: _sg_dscis
+  failed_when: false
+  when: _sg_cluster_reachable | bool and (_sg_dsc_crds.results[1].resources | default([]) | length > 0)
+
+- name: Read the KServe controller
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: redhat-ods-applications
+    name: kserve-controller-manager
+  register: _sg_kserve
+  when: _sg_cluster_reachable | bool
+
+- name: Collect platform facts
+  ansible.builtin.set_fact:
+    _sg_raw_platform:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      dsc_crd: "{{ (_sg_dsc_crds.results | default([{}]))[0].resources | default([]) | length > 0 }}"
+      dscs: "{{ _sg_dscs.resources | default([]) }}"
+      dscis: "{{ _sg_dscis.resources | default([]) }}"
+      kserve: "{{ _sg_kserve.resources | default([]) | first | default(none) }}"

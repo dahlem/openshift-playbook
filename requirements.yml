@@ -4,3 +4,11 @@ collections:
     version: ">=3.0.0"
   - name: amazon.aws
     version: ">=7.0.0"
+  # The ServeGuard workload (playbooks/serveguard-demo*.yml), from the serveguard
+  # repository's integrations/openshift-ai/ansible directory. For a local
+  # checkout next to this repository use requirements-dev.yml instead. The
+  # collection is on the serveguard branch satml-subliminal-revision (not pushed
+  # yet); until it is merged and pushed, use requirements-dev.yml.
+  - name: https://github.com/dahlem/serveguard.git#/integrations/openshift-ai/ansible
+    type: git
+    version: main

@@ -1,0 +1,13 @@
+---
+- name: Evaluate the registry
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_registry | sg_eval_registry({
+           'needed': (_sg_workload.receiver_image | default('')) | length == 0
+                     or (_sg_workload.registry | default('')) is match('image-registry.openshift-image-registry.svc'),
+           'registry': _sg_workload.registry | default(''),
+           'quay': serveguard_quay,
+           'quay_min': versions.serveguard.requirements.quay_min }) }}
+
+- name: Record registry checks
+  ansible.builtin.include_tasks: _record.yml

@@ -1,0 +1,24 @@
+---
+- name: Read the ClusterImagePolicy
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterImagePolicy
+    name: "{{ serveguard_cip_name }}"
+  register: _sg_cip
+  failed_when: false
+  when: serveguard_cluster_image_policy | bool and _sg_cluster_reachable | bool
+
+- name: Read the receiver image public key
+  ansible.builtin.stat:
+    path: "{{ serveguard_receiver_image_public_key | expanduser }}"
+  register: _sg_cip_key
+  when: serveguard_cluster_image_policy | bool and serveguard_receiver_image_public_key | length > 0
+
+- name: Collect image-policy facts
+  ansible.builtin.set_fact:
+    _sg_raw_image_policy:
+      existing: "{{ _sg_cip.resources | default([]) | first | default(none) }}"
+      key_exists: "{{ _sg_cip_key.stat.exists | default(false) }}"
+      key_data: >-
+        {{ lookup('ansible.builtin.file', serveguard_receiver_image_public_key | expanduser) | b64encode
+           if (_sg_cip_key.stat.exists | default(false)) else '' }}

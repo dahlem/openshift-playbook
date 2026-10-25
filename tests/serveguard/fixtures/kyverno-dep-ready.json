@@ -1,0 +1,27 @@
+[
+ {
+  "metadata": {
+   "name": "kyverno-admission-controller",
+   "namespace": "kyverno",
+   "labels": {
+    "app.kubernetes.io/component": "admission-controller",
+    "app.kubernetes.io/part-of": "kyverno"
+   }
+  },
+  "spec": {
+   "template": {
+    "spec": {
+     "containers": [
+      {
+       "name": "kyverno",
+       "image": "reg.nirmata.io/nirmata/kyverno:v1.13.4-n4k.nirmata.1"
+      }
+     ]
+    }
+   }
+  },
+  "status": {
+   "readyReplicas": 1
+  }
+ }
+]

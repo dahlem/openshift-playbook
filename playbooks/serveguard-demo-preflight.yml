@@ -1,0 +1,60 @@
+---
+# Read-only: run every ServeGuard platform precondition against the account and
+# (if it exists) the cluster, then the serveguard.openshift_ai preflight role, and
+# print a pass/fail table. Changes nothing: no cluster,
+# pool, admin user, operator or namespace is created. Run it before the deploy.
+#
+# Usage:
+#   ansible-playbook playbooks/serveguard-demo-preflight.yml -e @scenarios/serveguard/cpu.yml --ask-vault-pass
+#
+# Cluster-side checks need `oc` logged in to the cluster (rows show N/A otherwise).
+# Exit status is non-zero when any row is FAIL or CONFLICT.
+
+- name: ServeGuard preflight (read-only)
+  hosts: localhost
+  vars:
+    serveguard_checks_mode: report
+  tasks:
+    - name: Require a serveguard scenario
+      ansible.builtin.assert:
+        that: serveguard_pool_name is defined and ai_platform_mode == 'standard'
+        fail_msg: "Pass a scenario: -e @scenarios/serveguard/cpu.yml (or gpu.yml)."
+
+    - name: Load version constraints
+      ansible.builtin.include_vars:
+        file: "{{ versions_file }}"
+        name: versions
+
+    # Session logins only (local CLI state). Unlike the login role, this never
+    # creates a cluster-admin user or writes credentials.
+    - name: Check the OCM/ROSA session
+      ansible.builtin.command: rosa whoami
+      register: _sg_pf_rosa
+      changed_when: false
+      failed_when: false
+
+    - name: Log in to ROSA and OCM with the vault token (session only)
+      ansible.builtin.command: "{{ item }} login --token={{ vault_ocm_token }}"
+      loop: [ocm, rosa]
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: _sg_pf_rosa.rc != 0 and vault_ocm_token is defined
+
+    - name: Run every platform precondition
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: preflight
+
+    # The workload's own read-only checks (serveguard.openshift_ai).
+    - name: Workload preflight
+      ansible.builtin.include_role:
+        name: serveguard.openshift_ai.preflight
+      when:
+        - _sg_raw_workload.collection is not none
+        - _sg_cluster_reachable | bool
+
+    - name: Table of the platform checks
+      ansible.builtin.include_role:
+        name: serveguard_checks
+        tasks_from: report

@@ -1,0 +1,33 @@
+---
+# Read-only: local CLI versions and Python modules.
+
+- name: Read local CLI versions
+  ansible.builtin.shell: "{{ item.value }} 2>&1"
+  register: _sg_tool_out
+  changed_when: false
+  failed_when: false
+  loop: "{{ _sg_tool_cmds | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _sg_tool_cmds:
+      rosa: rosa version
+      aws: aws --version
+      oc: oc version --client
+      ocm: ocm version
+
+- name: Check Python modules for the ansible interpreter
+  ansible.builtin.command:
+    argv: ["{{ ansible_playbook_python }}", "-c", "import {{ item }}"]
+  register: _sg_py_out
+  changed_when: false
+  failed_when: false
+  loop: "{{ versions.serveguard.requirements.python_modules }}"
+
+- name: Collect local facts
+  ansible.builtin.set_fact:
+    _sg_raw_local:
+      ansible_core: "{{ ansible_version.full }}"
+      python: "{{ ansible_playbook_python }}"
+      tools: "{{ _sg_tool_out.results | sg_command_results }}"
+      python_modules: "{{ _sg_py_out.results | sg_command_results | sg_rc_ok }}"

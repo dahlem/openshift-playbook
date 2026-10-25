@@ -1,0 +1,15 @@
+---
+- name: Evaluate the workload requests
+  ansible.builtin.set_fact:
+    _sg_result: >-
+      {{ _sg_raw_workload | sg_eval_workload({
+           'collection': serveguard_collection,
+           'names': serveguard_workload_vars,
+           'required': serveguard_workload_required | map('extract', serveguard_workload_vars) | list }) }}
+
+- name: Keep the effective workload requests
+  ansible.builtin.set_fact:
+    _sg_workload: "{{ _sg_result.workload }}"
+
+- name: Record workload checks
+  ansible.builtin.include_tasks: _record.yml

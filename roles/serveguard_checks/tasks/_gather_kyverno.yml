@@ -1,0 +1,44 @@
+---
+- name: Read the Kyverno CRD
+  kubernetes.core.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: clusterpolicies.kyverno.io
+  register: _sg_kv_crd
+  when: _sg_cluster_reachable | bool
+
+- name: Read our Kyverno operator subscription
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    namespace: "{{ operators_install.kyverno.subscription.namespace }}"
+    name: "{{ operators_install.kyverno.subscription.name }}"
+  register: _sg_kv_sub
+  when: _sg_cluster_reachable | bool
+
+- name: Read Kyverno admission controllers (any namespace)
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    label_selectors: ["app.kubernetes.io/component=admission-controller", "app.kubernetes.io/part-of=kyverno"]
+  register: _sg_kv_dep
+  when: _sg_cluster_reachable | bool
+
+- name: Read registry pull secrets in Kyverno's namespace
+  kubernetes.core.k8s_info:
+    kind: Secret
+    namespace: >-
+      {{ (_sg_kv_dep.resources | default([]) | first | default({})).metadata.namespace
+         | default(_sg_workload.kyverno_namespace | default('kyverno')) }}
+    field_selectors: ["type=kubernetes.io/dockerconfigjson"]
+  register: _sg_kv_secrets
+  no_log: true
+  when: _sg_cluster_reachable | bool and (_sg_workload.enforcer | default('vap')) == 'kyverno'
+
+- name: Collect Kyverno facts
+  ansible.builtin.set_fact:
+    _sg_raw_kyverno:
+      cluster_reachable: "{{ _sg_cluster_reachable | bool }}"
+      crd: "{{ _sg_kv_crd.resources | default([]) | length > 0 }}"
+      subscription: "{{ _sg_kv_sub.resources | default([]) | first | default(none) }}"
+      deployments: "{{ _sg_kv_dep.resources | default([]) }}"
+      secrets: "{{ _sg_kv_secrets.resources | default([]) | map(attribute='metadata.name') | list }}"

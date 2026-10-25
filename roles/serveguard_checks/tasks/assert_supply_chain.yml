@@ -1,0 +1,84 @@
+---
+# Facts of serveguard.openshift_ai, asserted after the role that sets them.
+# Input: _sg_stage = trust_anchor | publisher | admit | stories. The supply-chain checks
+# are skipped (with a note) for a collection that predates ADR-0001.
+#   trust_anchor  serveguard_rendered {anchor_digest, anchor_signed (operator key, every mode),
+#                 receiver {required[, detector_digest, tau, max_bound]}, stories [names]}
+#   publisher     serveguard_adapter_ref (digest-pinned), serveguard_attestations
+#                 {oms, confinement[, provenance]: sha256 each}, serveguard_receiver_block
+#                 {detector_digest, bounds {layer: "n/d"}} with a required receiver, else none
+#   admit         serveguard_vsa {adapter_ref, digest, admitted, reason, verified_levels, receiver}
+#   stories       every rendered story judged; serveguard_receiver_stories_result: the four
+#                 receiver stories, all as expected, iff a receiver is required
+
+- name: Collection without supply-chain attestation
+  ansible.builtin.debug:
+    msg: "serveguard.openshift_ai does not declare serveguard_signing_mode: no {{ _sg_stage }} supply-chain facts to assert."
+  when: not (_sg_workload.supply_chain | default(false) | bool)
+
+- name: "Assert supply-chain facts: {{ _sg_stage }}"
+  when: _sg_workload.supply_chain | default(false) | bool
+  ansible.builtin.assert:
+    that: "{{ _sg_checks_by_stage[_sg_stage] }}"
+    fail_msg: >-
+      {{ _sg_stage }}: facts missing or malformed (receiver required={{ _sg_rcv }}):
+      rendered={{ serveguard_rendered | default({}) | dict2items
+                  | selectattr('key', 'in', ['anchor_digest', 'anchor_signed', 'receiver', 'stories'])
+                  | items2dict | to_json }},
+      adapter_ref={{ serveguard_adapter_ref | default('undefined') }},
+      attestations={{ serveguard_attestations | default('undefined') | to_json }},
+      receiver_block={{ serveguard_receiver_block | default('undefined') | to_json }},
+      vsa={{ serveguard_vsa | default('undefined') | to_json }},
+      stories={{ serveguard_stories_result | default([]) | map(attribute='story') | list | to_json }},
+      receiver_stories={{ serveguard_receiver_stories_result | default('undefined') | to_json }}
+  vars:
+    _sg_digest: '^(sha256:)?[0-9a-f]{64}$'
+    _sg_ref: '^oci://[^@\s]+@sha256:[0-9a-f]{64}$'
+    _sg_rcv: "{{ _sg_workload.receiver_required | default(false) | bool }}"
+    _sg_detector: "{{ ((serveguard_rendered | default({})).receiver | default({})).detector_digest | default('') }}"
+    _sg_receiver_stories: [receiver-admitted, receiver-tampered-witness, receiver-tau-looser, receiver-missing]
+    # the stories this run asked for (serveguard_stories narrows the rendered catalog)
+    _sg_asked: >-
+      {{ (serveguard_rendered | default({})).stories | default([])
+         | intersect(serveguard_stories | default((serveguard_rendered | default({})).stories | default([]))) }}
+    _sg_checks_by_stage:
+      trust_anchor:
+        - serveguard_rendered is defined
+        - serveguard_rendered.anchor_digest | default('') is match(_sg_digest)
+        - serveguard_rendered.anchor_signed | default(false) | bool
+        - (serveguard_rendered.receiver | default({})).required | default(false) | bool == _sg_rcv
+        # with a receiver the anchor pins the descriptor's detector, tau and the bound ceiling
+        - not _sg_rcv or _sg_detector is match('^[0-9a-f]{64}$')
+        - not _sg_rcv or _sg_receiver.detector_digest | default(none) is none or _sg_detector == _sg_receiver.detector_digest
+        - not _sg_rcv or (serveguard_rendered.receiver.tau is defined and serveguard_rendered.receiver.max_bound is defined)
+        - serveguard_rendered.stories is defined and serveguard_rendered.stories is sequence
+        - _sg_rcv == (_sg_receiver_stories | difference(serveguard_rendered.stories) | length == 0)
+      publisher:
+        - serveguard_adapter_ref is defined
+        - serveguard_adapter_ref is match(_sg_ref)
+        - serveguard_attestations is defined
+        - serveguard_attestations is mapping
+        - "'oms' in serveguard_attestations and 'confinement' in serveguard_attestations"
+        - serveguard_attestations.values() | map('string') | reject('match', _sg_digest) | list | length == 0
+        - _sg_rcv or serveguard_receiver_block | default(none) is none
+        - not _sg_rcv or serveguard_receiver_block | default(none) is mapping
+        - not _sg_rcv or serveguard_receiver_block.detector_digest == _sg_detector
+        - not _sg_rcv or (serveguard_receiver_block.bounds is mapping and serveguard_receiver_block.bounds | length > 0)
+      admit:
+        - serveguard_vsa is defined
+        - serveguard_vsa.admitted | default(false) | bool
+        - serveguard_vsa.digest | default('') is match(_sg_digest)
+        - serveguard_vsa.adapter_ref | default('') is match(_sg_ref)
+        - serveguard_vsa.adapter_ref == serveguard_adapter_ref
+        - serveguard_vsa.verified_levels is sequence
+        - "'SERVEGUARD_CONFINEMENT_V1' in serveguard_vsa.verified_levels"
+        - _sg_rcv == ('SERVEGUARD_COMPOSITION_V1' in serveguard_vsa.verified_levels)
+        - serveguard_vsa.receiver | default('') == (_sg_detector if _sg_rcv else '')
+      stories:
+        - serveguard_stories_result is defined
+        - _sg_asked | difference(serveguard_stories_result | map(attribute='story') | list) | length == 0
+        - serveguard_receiver_stories_result is defined
+        - >-
+          (serveguard_receiver_stories_result | map(attribute='story') | sort | list)
+          == ((_sg_receiver_stories | intersect(_sg_asked) | sort | list) if _sg_rcv else [])
+        - serveguard_receiver_stories_result | rejectattr('as_expected') | list | length == 0

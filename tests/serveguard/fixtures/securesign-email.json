@@ -1,0 +1,20 @@
+{
+ "metadata": {
+  "name": "securesign",
+  "namespace": "trusted-artifact-signer"
+ },
+ "spec": {
+  "fulcio": {
+   "config": {
+    "OIDCIssuers": [
+     {
+      "Issuer": "https://sso.example.com/realms/x",
+      "IssuerURL": "https://sso.example.com/realms/x",
+      "ClientID": "trusted-artifact-signer",
+      "Type": "email"
+     }
+    ]
+   }
+  }
+ }
+}

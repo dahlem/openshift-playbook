@@ -1,0 +1,68 @@
+---
+# Read-only: instance-type offerings in the private subnet's AZ, instance specs,
+# EC2 vCPU quotas and running instances.
+
+- name: Instance types this run uses
+  ansible.builtin.set_fact:
+    _sg_types: "{{ [versions.infrastructure.compute_instance_type, serveguard_pool_instance_type] | unique }}"
+    _sg_az: "{{ _sg_aws.az | default(none) }}"
+
+- name: Read instance-type offerings in the AZ
+  ansible.builtin.command: >-
+    aws ec2 describe-instance-type-offerings --location-type availability-zone
+    --filters Name=location,Values={{ _sg_az }} Name=instance-type,Values={{ _sg_types | join(',') }}
+    --query 'InstanceTypeOfferings[].InstanceType' --output json --region {{ aws_region }}
+  register: _sg_offered
+  changed_when: false
+  failed_when: false
+  when: _sg_az is not none
+
+- name: Read instance specs
+  ansible.builtin.command: >-
+    aws ec2 describe-instance-types --instance-types {{ _sg_types | join(' ') }}
+    --query 'InstanceTypes[].{type: InstanceType, vcpus: VCpuInfo.DefaultVCpus,
+    memory_mib: MemoryInfo.SizeInMiB, gpus: GpuInfo.Gpus[0].Count}'
+    --output json --region {{ aws_region }}
+  register: _sg_specs
+  changed_when: false
+  failed_when: false
+
+- name: Read ROSA-supported instance types
+  ansible.builtin.command: rosa list instance-types --hosted-cp -o json
+  register: _sg_rosa_types
+  changed_when: false
+  failed_when: false
+
+- name: Read EC2 vCPU quotas
+  ansible.builtin.command: >-
+    aws service-quotas get-service-quota --service-code ec2 --quota-code {{ item }}
+    --query 'Quota.Value' --output text --region {{ aws_region }}
+  register: _sg_quotas
+  changed_when: false
+  failed_when: false
+  loop: "{{ versions.serveguard.requirements.quota_codes.values() | list }}"
+
+- name: Read running instances
+  ansible.builtin.command: >-
+    aws ec2 describe-instances --filters Name=instance-state-name,Values=running,pending
+    --query 'Reservations[].Instances[].{type: InstanceType, cores: CpuOptions.CoreCount, threads: CpuOptions.ThreadsPerCore}'
+    --output json --region {{ aws_region }}
+  register: _sg_instances
+  changed_when: false
+  failed_when: false
+
+- name: Collect quota facts
+  ansible.builtin.set_fact:
+    _sg_raw_quota:
+      az: "{{ _sg_az }}"
+      offered: "{{ (_sg_offered.stdout | from_json) if (_sg_offered.rc | default(1)) == 0 else [] }}"
+      rosa_types: >-
+        {{ ((_sg_rosa_types.stdout | from_json) | map(attribute='id') | list)
+           if _sg_rosa_types.rc == 0 else none }}
+      specs: >-
+        {{ dict((_sg_specs.stdout | from_json) | map(attribute='type')
+                | zip(_sg_specs.stdout | from_json)) if _sg_specs.rc == 0 else {} }}
+      quotas: >-
+        {{ dict(_sg_quotas.results | map(attribute='item')
+                | zip(_sg_quotas.results | map('sg_quota_value'))) }}
+      instances: "{{ ((_sg_instances.stdout | from_json) if _sg_instances.rc == 0 else []) | sg_instance_vcpus }}"
